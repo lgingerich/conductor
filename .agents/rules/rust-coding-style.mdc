@@ -1,0 +1,115 @@
+---
+description: Idiomatic Rust coding style for this project
+globs: src/**/*.rs,tests/**/*.rs,benches/**/*.rs,examples/**/*.rs,Cargo.toml
+alwaysApply: false
+---
+
+# Rust Coding Style
+
+Favor idiomatic, safe, readable Rust; optimize when there is a clear reason.
+
+## General Style
+
+- Prefer clear, direct code over clever abstractions.
+- Keep functions focused. Extract helpers when branching, conversion, or validation logic grows.
+- Use `?`, `Option`, `Result`, pattern matching, and iterators idiomatically.
+- Follow Clippy suggestions unless they make the code less clear or conflict with a deliberate API choice.
+- Avoid unnecessary `.clone()`, `.to_string()`, and allocation. If ownership is non-obvious, make the reason clear in code structure.
+- Use enums and structured types for constrained domains; avoid stringly typed core APIs.
+
+## Internal API Changes
+
+- Do not preserve backwards compatibility for internal Rust APIs unless explicitly requested.
+- When internal semantics need to change, update the existing method/type directly and migrate call sites.
+- Do not add parallel variants like `*_trusted`, `*_unchecked`, `try_*`, or duplicate constructors just to avoid touching callers.
+- Prefer one clear API with the correct invariant boundary over multiple methods that differ only by validation assumptions.
+
+## Public APIs
+
+- Prefer private fields by default. Make fields `pub` only when external code genuinely needs direct access for readability, performance, or API contracts. When cross-module access is needed but direct field exposure is unnecessary, prefer a `pub fn` accessor over a `pub` field.
+- When multiple concrete types share a guaranteed common capability, add the same public accessor to each for API consistency — this is not speculative infrastructure, it is making an existing surface uniform.
+- Accept borrowed inputs such as `&str` and `&[T]` when ownership is not required.
+- Return owned values when the caller should own the result.
+- Avoid leaking lifetimes into public return types unless zero-copy behavior is an explicit API goal.
+- Keep external crate types behind adapters unless they are intentionally part of the public contract.
+- Keep serialization, wire-format, persistence, and framework details at the boundary of the crate.
+
+## Errors
+
+- Library APIs should expose typed errors, preferably with `thiserror`, when callers can handle variants meaningfully.
+- Use `anyhow` in binaries, examples, tests, setup code, or application boundaries where context matters more than typed API guarantees.
+- Do not use `Box<dyn Error>` as a default error strategy.
+- Avoid `unwrap()`, `expect()`, `panic!()`, `todo!()`, and `unimplemented!()` in production paths.
+- In tests, `unwrap()` and `expect()` are acceptable when they keep the test focused.
+
+### Error layering
+
+Error types form a chain from domain-internal to I/O-facing. Each layer
+adds a `#[from]` variant for the layer below, so `?` auto-converts up
+the chain without `map_err`:
+
+```
+leaf error (finest granularity — validation, constraints)
+  ├─→ mid-layer error A  (#[from])
+  ├─→ mid-layer error B  (#[from])
+  └─→ top-level error    (#[from])
+
+mid-layer A ──→ top-level error (#[from])
+mid-layer B ──→ top-level error (#[from])
+top-level   ──→ application error (#[from])
+```
+
+Example: `ValidationError` → `DomainError` → `ServiceError` → `ApiError`.
+The names don't matter; the direction and the `#[from]` chain do.
+
+Rules:
+
+- Domain constructors and validation functions return the leaf error type
+  — never a higher-layer error. A domain operation should not know about
+  request parsing, config keys, or HTTP status codes.
+- Add a `#[from]` variant when a broader error type should propagate
+  failures from the layer below. `?` does the rest.
+- Leaf errors should carry enough context for the caller to identify the
+  offending input (e.g. a field name, a value snippet, a constraint
+  description). Do not `map_err` just to rename the field — the domain
+  type's own label is the canonical identifier.
+
+### When `map_err` is a code smell
+
+`map_err` is a signal. Before writing it, check:
+
+1. **Is a `From` impl missing?** If you're converting by hand between
+   two error types in the same crate, add `#[from]` instead and use `?`.
+2. **Is a domain function returning a higher-layer error?** If a
+   validation function returns an HTTP-layer or serialization-layer
+   error, the layers are inverted. Move the conversion to the boundary
+   where that context belongs.
+
+Legitimate uses of `map_err`:
+
+- **Bridging to `&'static str` in tests** (or to any error type where a
+  `From` impl would be inappropriate or impossible, e.g. across crate
+  boundaries with orphan-rule constraints). Use
+  `.map_err(|_| "human-readable context")?`.
+- **Context-dependent error construction at a boundary.** When a
+  caller-specific piece of data (like a config key path or a request ID)
+  must be injected into an error variant, and that data is unavailable
+  inside the lower-layer error. This should live at the boundary, not
+  inside a domain helper.
+
+## Async and Concurrency
+
+- Do not hold a `std::sync::Mutex` or `RwLock` guard across `.await`.
+- Prefer dropping synchronous guards before `.await`, or use async-aware primitives when the lock must span await points.
+- Keep blocking work out of async tasks unless it is explicitly isolated.
+
+## Unsafe
+
+- Do not introduce `unsafe` unless the user explicitly asks or the crate already requires it.
+- Every `unsafe` block must have a nearby `SAFETY:` comment explaining the invariant.
+- Every `unsafe fn` must document caller obligations in a `# Safety` section.
+
+## Documentation
+
+- Add rustdoc for important public types, traits, functions, and modules once their purpose is stable.
+- Document invariants that future callers, maintainers, or integrations may rely on.
