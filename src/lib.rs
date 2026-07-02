@@ -1,5 +1,9 @@
 //! A strict Rust project template.
 
+mod asset;
+mod common;
+mod pipeline;
+
 /// Returns the crate name embedded by Cargo.
 #[must_use]
 pub fn crate_name() -> &'static str {
@@ -12,6 +16,6 @@ mod tests {
 
     #[test]
     fn crate_name_is_available() {
-        assert_eq!(crate_name(), "rust-template");
+        assert_eq!(crate_name(), "conductor");
     }
 }
