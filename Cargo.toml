@@ -1,13 +1,13 @@
 [package]
-name = "rust-template"
+name = "conductor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95.0"
-authors = ["TODO"]
-description = "TODO"
+authors = ["Landon Gingerich"]
+description = "Experimental next-generation data orchestration"
 readme = "README.md"
-repository = "TODO"
-license = "MIT OR Apache-2.0"
+repository = "https://github.com/lgingerich/conductor"
+license = "MIT"
 
 [dependencies]
 
