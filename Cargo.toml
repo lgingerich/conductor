@@ -10,7 +10,6 @@ repository = "https://github.com/lgingerich/conductor"
 license = "MIT"
 
 [dependencies]
-chrono = "0.4"
 
 [dev-dependencies]
 

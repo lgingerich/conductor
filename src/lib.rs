@@ -1,8 +1,18 @@
-//! A strict Rust project template.
+//! Conductor — experimental next-generation data orchestration.
+//!
+//! Core primitives are [`Task`] (runnable), [`Artifact`] (data identity), and
+//! [`Pipeline`] (composition). Human-readable slugs are interned to dense ids
+//! via [`Interner`]. See `docs/core-primitives.md` for the design.
 
-mod asset;
-mod common;
+mod artifact;
+mod intern;
 mod pipeline;
+mod task;
+
+pub use artifact::Artifact;
+pub use intern::{ArtifactId, Interner, PipelineId, TaskId};
+pub use pipeline::{Pipeline, PipelineRun, PipelineRunId};
+pub use task::{Task, TaskRun, TaskRunId, TaskState};
 
 /// Returns the crate name embedded by Cargo.
 #[must_use]
