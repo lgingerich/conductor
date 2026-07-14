@@ -4,30 +4,33 @@
 //! [`crate::Task`], and [`crate::Pipeline`] with human-readable names; an
 //! [`Interner`] may be built internally when an execution plan needs cheap
 //! `Copy` handles. See this module's persistence notes.
-//!
-//! Currently unused by the public API; retained for the upcoming graph planner.
-
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 
 /// Dense id for an artifact slug (process-local).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ArtifactId(usize);
 
 impl ArtifactId {
     /// Returns the raw numeric id.
     #[must_use]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const fn as_usize(self) -> usize {
         self.0
     }
 }
 
 /// Dense id for a task name (process-local).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct TaskId(usize);
 
 impl TaskId {
+    /// Creates a task id from a dense index (process-local).
+    #[must_use]
+    pub(crate) const fn from_usize(id: usize) -> Self {
+        Self(id)
+    }
+
     /// Returns the raw numeric id.
     #[must_use]
     pub(crate) const fn as_usize(self) -> usize {
@@ -36,12 +39,13 @@ impl TaskId {
 }
 
 /// Dense id for a pipeline name (process-local).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PipelineId(usize);
 
 impl PipelineId {
     /// Returns the raw numeric id.
     #[must_use]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) const fn as_usize(self) -> usize {
         self.0
     }

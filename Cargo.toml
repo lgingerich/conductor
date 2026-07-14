@@ -10,8 +10,10 @@ repository = "https://github.com/lgingerich/conductor"
 license = "MIT"
 
 [dependencies]
+thiserror = "2.0.18"
 
 [dev-dependencies]
+ascii-dag = "0.9.1"
 
 [profile.release]
 codegen-units = 1

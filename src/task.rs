@@ -3,6 +3,39 @@ use std::time::Instant;
 
 use crate::artifact::Artifact;
 
+/// Stable human-readable identity for a [`Task`].
+///
+/// Used at definition time and in errors. Planning/execution hot paths use
+/// dense task ids internally — not this type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TaskName(String);
+
+impl TaskName {
+    /// Creates a task name from a human-readable slug.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// Returns this name as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TaskName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for TaskName {
+    fn from(name: &str) -> Self {
+        Self::new(name)
+    }
+}
+
 /// A task-scoped run identifier.
 ///
 /// Construct with [`TaskRunId::from`] — callers always supply the run name.
@@ -28,16 +61,16 @@ impl From<&str> for TaskRunId {
 /// dependencies (`after`) for ordering without a data product.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
-    name: String,
+    name: TaskName,
     inputs: Vec<Artifact>,
     outputs: Vec<Artifact>,
-    after: Vec<String>,
+    after: Vec<TaskName>,
 }
 
 impl Task {
     /// Creates a task with the given human-readable name and no ports or deps.
     #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<TaskName>) -> Self {
         Self {
             name: name.into(),
             inputs: Vec::new(),
@@ -63,17 +96,13 @@ impl Task {
     /// Sets control dependencies from other tasks (by name).
     #[must_use]
     pub fn with_after<'a>(mut self, tasks: impl IntoIterator<Item = &'a Task>) -> Self {
-        self.after = tasks
-            .into_iter()
-            .map(Task::name)
-            .map(str::to_owned)
-            .collect();
+        self.after = tasks.into_iter().map(|task| task.name.clone()).collect();
         self
     }
 
     /// Returns this task's name.
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &TaskName {
         &self.name
     }
 
@@ -91,7 +120,7 @@ impl Task {
 
     /// Returns control-dependency task names.
     #[must_use]
-    pub fn after(&self) -> &[String] {
+    pub fn after(&self) -> &[TaskName] {
         &self.after
     }
 }
@@ -129,7 +158,7 @@ pub enum TaskState {
 /// A record of one task's execution within a specific run.
 #[derive(Debug, Clone)]
 pub struct TaskRun {
-    task: String,
+    task: TaskName,
     run_id: TaskRunId,
     state: TaskState,
 }
@@ -137,7 +166,7 @@ pub struct TaskRun {
 impl TaskRun {
     /// Creates a new task run in the [`TaskState::Pending`] state.
     #[must_use]
-    pub fn new(task: impl Into<String>, run_id: TaskRunId) -> Self {
+    pub fn new(task: impl Into<TaskName>, run_id: TaskRunId) -> Self {
         Self {
             task: task.into(),
             run_id,
@@ -147,7 +176,7 @@ impl TaskRun {
 
     /// Returns the task name for this run.
     #[must_use]
-    pub fn task(&self) -> &str {
+    pub fn task(&self) -> &TaskName {
         &self.task
     }
 
@@ -166,7 +195,7 @@ impl TaskRun {
 
 #[cfg(test)]
 mod tests {
-    use super::{Task, TaskRun, TaskRunId, TaskState};
+    use super::{Task, TaskName, TaskRun, TaskRunId, TaskState};
     use crate::artifact::Artifact;
 
     #[test]
@@ -175,15 +204,13 @@ mod tests {
         let pg = Artifact::new("postgres/app/users");
         let load = Task::new("gcs_to_postgres")
             .with_inputs([gcs])
-            .with_outputs([pg.clone()]);
-        let index = Task::new("create_indexes")
-            .with_inputs([pg])
-            .with_after([&load]);
+            .with_outputs([pg]);
+        let index = Task::new("create_indexes").with_after([&load]);
 
-        assert_eq!(index.name(), "create_indexes");
+        assert_eq!(index.name(), &TaskName::from("create_indexes"));
         assert!(index.outputs().is_empty());
-        assert_eq!(index.inputs()[0].slug(), "postgres/app/users");
-        assert_eq!(index.after(), &["gcs_to_postgres".to_owned()]);
+        assert!(index.inputs().is_empty());
+        assert_eq!(index.after(), &[TaskName::from("gcs_to_postgres")]);
         assert_eq!(load.outputs().len(), 1);
         assert_eq!(load.inputs().len(), 1);
     }
@@ -191,7 +218,7 @@ mod tests {
     #[test]
     fn task_run_starts_pending() {
         let run = TaskRun::new("vacuum", TaskRunId::from("vacuum-test"));
-        assert_eq!(run.task(), "vacuum");
+        assert_eq!(run.task(), &TaskName::from("vacuum"));
         assert_eq!(run.run_id().to_string(), "vacuum-test");
         assert_eq!(run.state(), &TaskState::Pending);
     }

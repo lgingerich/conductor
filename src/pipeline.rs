@@ -1,6 +1,38 @@
 use std::fmt;
 
+use crate::errors::GraphError;
+use crate::graph::TaskGraph;
 use crate::task::{Task, TaskRun, TaskRunId};
+
+/// Stable human-readable identity for a [`Pipeline`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipelineName(String);
+
+impl PipelineName {
+    /// Creates a pipeline name from a human-readable slug.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// Returns this name as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PipelineName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for PipelineName {
+    fn from(name: &str) -> Self {
+        Self::new(name)
+    }
+}
 
 /// A pipeline-scoped run identifier.
 ///
@@ -27,14 +59,14 @@ impl From<&str> for PipelineRunId {
 /// dependencies. A task starts only after its dependencies are satisfied.
 #[derive(Debug, Clone)]
 pub struct Pipeline {
-    name: String,
+    name: PipelineName,
     tasks: Vec<Task>,
 }
 
 impl Pipeline {
     /// Creates a pipeline with the given human-readable name and tasks.
     #[must_use]
-    pub fn new(name: impl Into<String>, tasks: impl IntoIterator<Item = Task>) -> Self {
+    pub fn new(name: impl Into<PipelineName>, tasks: impl IntoIterator<Item = Task>) -> Self {
         Self {
             name: name.into(),
             tasks: tasks.into_iter().collect(),
@@ -43,7 +75,7 @@ impl Pipeline {
 
     /// Returns this pipeline's name.
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &PipelineName {
         &self.name
     }
 
@@ -51,6 +83,19 @@ impl Pipeline {
     #[must_use]
     pub fn tasks(&self) -> &[Task] {
         &self.tasks
+    }
+
+    /// Compiles this pipeline into a validated task dependency graph.
+    ///
+    /// Derives data edges from artifact input/output ports and control edges
+    /// from `after` dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphError`] when task names collide, an `after` target is
+    /// missing, edges conflict, or the dependency graph contains a cycle.
+    pub fn plan(&self) -> Result<TaskGraph, GraphError> {
+        TaskGraph::from_pipeline(self)
     }
 
     /// Creates a pending run of this pipeline.
@@ -63,7 +108,7 @@ impl Pipeline {
         let tasks = self
             .tasks
             .iter()
-            .map(|task| TaskRun::new(task.name(), TaskRunId::from(task.name())))
+            .map(|task| TaskRun::new(task.name().clone(), TaskRunId::from(task.name().as_str())))
             .collect();
 
         PipelineRun {
@@ -86,7 +131,7 @@ impl fmt::Display for Pipeline {
 /// per-task [`TaskRun`] outcomes.
 #[derive(Debug, Clone)]
 pub struct PipelineRun {
-    pipeline: String,
+    pipeline: PipelineName,
     run_id: PipelineRunId,
     tasks: Vec<TaskRun>,
 }
@@ -94,7 +139,7 @@ pub struct PipelineRun {
 impl PipelineRun {
     /// Creates an empty pipeline run with no task runs seeded.
     #[must_use]
-    pub fn new(pipeline: impl Into<String>, run_id: PipelineRunId) -> Self {
+    pub fn new(pipeline: impl Into<PipelineName>, run_id: PipelineRunId) -> Self {
         Self {
             pipeline: pipeline.into(),
             run_id,
@@ -123,11 +168,11 @@ impl PipelineRun {
             .tasks()
             .iter()
             .zip(task_run_ids)
-            .map(|(task, task_run_id)| TaskRun::new(task.name(), task_run_id))
+            .map(|(task, task_run_id)| TaskRun::new(task.name().clone(), task_run_id))
             .collect();
 
         Some(Self {
-            pipeline: pipeline.name().to_owned(),
+            pipeline: pipeline.name().clone(),
             run_id,
             tasks,
         })
@@ -135,7 +180,7 @@ impl PipelineRun {
 
     /// Returns the pipeline name for this run.
     #[must_use]
-    pub fn pipeline(&self) -> &str {
+    pub fn pipeline(&self) -> &PipelineName {
         &self.pipeline
     }
 
@@ -154,9 +199,9 @@ impl PipelineRun {
 
 #[cfg(test)]
 mod tests {
-    use super::{Pipeline, PipelineRun, PipelineRunId};
+    use super::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
     use crate::artifact::Artifact;
-    use crate::task::{Task, TaskRunId, TaskState};
+    use crate::task::{Task, TaskName, TaskRunId, TaskState};
 
     #[test]
     fn run_seeds_one_pending_run_per_task() {
@@ -164,19 +209,17 @@ mod tests {
         let pg = Artifact::new("postgres/app/users");
         let load = Task::new("gcs_to_postgres")
             .with_inputs([gcs])
-            .with_outputs([pg.clone()]);
-        let index = Task::new("create_indexes")
-            .with_inputs([pg])
-            .with_after([&load]);
+            .with_outputs([pg]);
+        let index = Task::new("create_indexes").with_after([&load]);
 
         let pipeline = Pipeline::new("load", [load, index]);
         let run = pipeline.run("load-test");
 
-        assert_eq!(run.pipeline(), "load");
+        assert_eq!(run.pipeline(), &PipelineName::from("load"));
         assert_eq!(run.run_id().to_string(), "load-test");
         assert_eq!(run.tasks().len(), 2);
-        assert_eq!(run.tasks()[0].task(), "gcs_to_postgres");
-        assert_eq!(run.tasks()[1].task(), "create_indexes");
+        assert_eq!(run.tasks()[0].task(), &TaskName::from("gcs_to_postgres"));
+        assert_eq!(run.tasks()[1].task(), &TaskName::from("create_indexes"));
         assert_eq!(run.tasks()[0].run_id().to_string(), "gcs_to_postgres");
         assert_eq!(run.tasks()[1].run_id().to_string(), "create_indexes");
         assert!(

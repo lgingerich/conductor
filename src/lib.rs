@@ -6,26 +6,14 @@
 //! `docs/core-primitives.md` for the design.
 
 mod artifact;
+mod errors;
+mod graph;
 mod intern;
 mod pipeline;
 mod task;
 
 pub use artifact::Artifact;
-pub use pipeline::{Pipeline, PipelineRun, PipelineRunId};
-pub use task::{Task, TaskRun, TaskRunId, TaskState};
-
-/// Returns the crate name embedded by Cargo.
-#[must_use]
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::crate_name;
-
-    #[test]
-    fn crate_name_is_available() {
-        assert_eq!(crate_name(), "conductor");
-    }
-}
+pub use errors::GraphError;
+pub use graph::{EdgeKind, GraphEdge, TaskGraph};
+pub use pipeline::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
+pub use task::{Task, TaskName, TaskRun, TaskRunId, TaskState};

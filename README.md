@@ -8,7 +8,7 @@ Core primitives (Task, Artifact, Pipeline) are documented in
 
 ## Try it
 
-Define the sample load pipeline and inspect the current API:
+Define a sample VOD packaging pipeline and inspect the current API:
 
 ```bash
 cargo run --example explore_pipeline
