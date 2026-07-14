@@ -1,44 +1,52 @@
-use crate::intern::ArtifactId;
+use std::fmt;
 
 /// A named, addressable data product (table, file, model, etc.).
 ///
-/// Artifacts are identity only — they are not runnable. Tasks declare
-/// artifacts as inputs/outputs via [`crate::ArtifactId`]; lineage and
-/// cascading recompute are derived from those declarations. The human-readable
-/// slug for an id lives in an [`crate::Interner`]. See `docs/core-primitives.md`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Artifacts are identity only — they are not runnable. Tasks declare them as
+/// [`inputs`](crate::Task::inputs) / [`outputs`](crate::Task::outputs); lineage
+/// is derived from those declarations. See `docs/core-primitives.md`.
+///
+/// Dense numeric ids (if used by a planner or runner) are an internal detail;
+/// the public identity of an artifact is its slug.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Artifact {
-    id: ArtifactId,
+    slug: String,
 }
 
 impl Artifact {
-    /// Creates an artifact with the given id.
+    /// Creates an artifact with the given human-readable slug.
     #[must_use]
-    pub fn new(id: ArtifactId) -> Self {
-        Self { id }
+    pub fn new(slug: impl Into<String>) -> Self {
+        Self { slug: slug.into() }
     }
 
-    /// Returns this artifact's id.
+    /// Returns this artifact's slug.
     #[must_use]
-    pub fn id(&self) -> ArtifactId {
-        self.id
+    pub fn slug(&self) -> &str {
+        &self.slug
+    }
+}
+
+impl fmt::Display for Artifact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.slug.fmt(f)
+    }
+}
+
+impl From<&str> for Artifact {
+    fn from(slug: &str) -> Self {
+        Self::new(slug)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Artifact;
-    use crate::Interner;
 
     #[test]
-    fn artifact_holds_interned_id() {
-        let mut names = Interner::new();
-        let id = names.artifact("postgres/app/users");
-        let artifact = Artifact::new(id);
-        assert_eq!(artifact.id(), id);
-        assert_eq!(
-            names.artifact_name(artifact.id()),
-            Some("postgres/app/users")
-        );
+    fn artifact_from_slug() {
+        let artifact = Artifact::new("postgres/app/users");
+        assert_eq!(artifact.slug(), "postgres/app/users");
+        assert_eq!(artifact.to_string(), "postgres/app/users");
     }
 }

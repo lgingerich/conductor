@@ -1,65 +1,48 @@
-//! Interned numeric IDs for human-readable slugs.
+//! Process-local slug ↔ dense-id tables for planners and runners.
 //!
-//! Users name tasks, artifacts, and pipelines with slugs. The [`Interner`]
-//! maps each slug to a dense [`Copy`] id used in graphs and runs.
+//! Not part of the public definition API. Users create [`crate::Artifact`],
+//! [`crate::Task`], and [`crate::Pipeline`] with human-readable names; an
+//! [`Interner`] may be built internally when an execution plan needs cheap
+//! `Copy` handles. See this module's persistence notes.
 //!
-//! # Persistence
-//!
-//! **Slugs are the durable identity. Numeric ids are process-local.**
-//!
-//! Today the name tables live only in memory. If Conductor restarts, this
-//! mapping is gone and previous id values must not be reused from disk or
-//! another process. After persistence exists, boot should reload definitions
-//! and run history **by slug**, then rebuild an [`Interner`] (re-intern) so
-//! in-memory graphs get fresh ids for that process generation.
-//!
-//! A WASM task container dying is separate: the interner stays valid as long
-//! as the Conductor process does. Only Conductor itself exiting drops these
-//! tables until they are rebuilt from durable state.
+//! Currently unused by the public API; retained for the upcoming graph planner.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 
-/// Dense id for an [`crate::Artifact`].
-///
-/// Process-local: do not persist this value as the artifact's identity; persist
-/// the slug and re-intern after restart. See this module's persistence notes.
+/// Dense id for an artifact slug (process-local).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ArtifactId(usize);
+pub(crate) struct ArtifactId(usize);
 
 impl ArtifactId {
     /// Returns the raw numeric id.
     #[must_use]
-    pub const fn as_usize(self) -> usize {
+    pub(crate) const fn as_usize(self) -> usize {
         self.0
     }
 }
 
-/// Dense id for a [`crate::Task`].
-///
-/// Process-local: do not persist this value as the task's identity; persist
-/// the slug and re-intern after restart. See this module's persistence notes.
+/// Dense id for a task name (process-local).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TaskId(usize);
+pub(crate) struct TaskId(usize);
 
 impl TaskId {
     /// Returns the raw numeric id.
     #[must_use]
-    pub const fn as_usize(self) -> usize {
+    pub(crate) const fn as_usize(self) -> usize {
         self.0
     }
 }
 
-/// Dense id for a [`crate::Pipeline`].
-///
-/// Process-local: do not persist this value as the pipeline's identity; persist
-/// the slug and re-intern after restart. See this module's persistence notes.
+/// Dense id for a pipeline name (process-local).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PipelineId(usize);
+pub(crate) struct PipelineId(usize);
 
 impl PipelineId {
     /// Returns the raw numeric id.
     #[must_use]
-    pub const fn as_usize(self) -> usize {
+    pub(crate) const fn as_usize(self) -> usize {
         self.0
     }
 }
@@ -97,11 +80,25 @@ impl NameTable {
 
 /// Maps human-readable slugs to typed numeric ids and back.
 ///
-/// Ids are only meaningful relative to the `Interner` that created them (and
-/// only for the lifetime of that process, until persistence + re-intern on
-/// boot exists). See this module's persistence notes.
+/// Internal to planning/execution. Ids are only meaningful relative to the
+/// `Interner` that created them (and only for the lifetime of that process,
+/// until persistence + re-intern on boot exists).
+///
+/// # Persistence
+///
+/// **Slugs are the durable identity. Numeric ids are process-local.**
+///
+/// Today the name tables live only in memory. If Conductor restarts, this
+/// mapping is gone and previous id values must not be reused from disk or
+/// another process. After persistence exists, boot should reload definitions
+/// and run history **by slug**, then rebuild an `Interner` (re-intern) so
+/// in-memory graphs get fresh ids for that process generation.
+///
+/// A WASM task container dying is separate: the interner stays valid as long
+/// as the Conductor process does. Only Conductor itself exiting drops these
+/// tables until they are rebuilt from durable state.
 #[derive(Debug, Default)]
-pub struct Interner {
+pub(crate) struct Interner {
     artifacts: NameTable,
     tasks: NameTable,
     pipelines: NameTable,
@@ -110,40 +107,40 @@ pub struct Interner {
 impl Interner {
     /// Creates an empty interner.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Interns an artifact slug, returning a stable [`ArtifactId`].
-    pub fn artifact(&mut self, name: &str) -> ArtifactId {
+    pub(crate) fn artifact(&mut self, name: &str) -> ArtifactId {
         ArtifactId(self.artifacts.intern(name))
     }
 
     /// Resolves an [`ArtifactId`] to its slug.
     #[must_use]
-    pub fn artifact_name(&self, id: ArtifactId) -> Option<&str> {
+    pub(crate) fn artifact_name(&self, id: ArtifactId) -> Option<&str> {
         self.artifacts.resolve(id.0)
     }
 
     /// Interns a task slug, returning a stable [`TaskId`].
-    pub fn task(&mut self, name: &str) -> TaskId {
+    pub(crate) fn task(&mut self, name: &str) -> TaskId {
         TaskId(self.tasks.intern(name))
     }
 
     /// Resolves a [`TaskId`] to its slug.
     #[must_use]
-    pub fn task_name(&self, id: TaskId) -> Option<&str> {
+    pub(crate) fn task_name(&self, id: TaskId) -> Option<&str> {
         self.tasks.resolve(id.0)
     }
 
     /// Interns a pipeline slug, returning a stable [`PipelineId`].
-    pub fn pipeline(&mut self, name: &str) -> PipelineId {
+    pub(crate) fn pipeline(&mut self, name: &str) -> PipelineId {
         PipelineId(self.pipelines.intern(name))
     }
 
     /// Resolves a [`PipelineId`] to its slug.
     #[must_use]
-    pub fn pipeline_name(&self, id: PipelineId) -> Option<&str> {
+    pub(crate) fn pipeline_name(&self, id: PipelineId) -> Option<&str> {
         self.pipelines.resolve(id.0)
     }
 }
@@ -166,7 +163,6 @@ mod tests {
         let p = names.pipeline("load");
         assert_eq!(names.pipeline_name(p), Some("load"));
 
-        // Namespaces are independent: same index can exist in each table.
         assert_eq!(a.as_usize(), 0);
         assert_eq!(t.as_usize(), 0);
         assert_eq!(p.as_usize(), 0);

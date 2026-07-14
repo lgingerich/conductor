@@ -1,8 +1,9 @@
 //! Conductor — experimental next-generation data orchestration.
 //!
 //! Core primitives are [`Task`] (runnable), [`Artifact`] (data identity), and
-//! [`Pipeline`] (composition). Human-readable slugs are interned to dense ids
-//! via [`Interner`]. See `docs/core-primitives.md` for the design.
+//! [`Pipeline`] (composition). Define them with human-readable names; dense
+//! id interning stays internal for planners/runners. See
+//! `docs/core-primitives.md` for the design.
 
 mod artifact;
 mod intern;
@@ -10,7 +11,6 @@ mod pipeline;
 mod task;
 
 pub use artifact::Artifact;
-pub use intern::{ArtifactId, Interner, PipelineId, TaskId};
 pub use pipeline::{Pipeline, PipelineRun, PipelineRunId};
 pub use task::{Task, TaskRun, TaskRunId, TaskState};
 

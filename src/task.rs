@@ -1,7 +1,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use crate::intern::{ArtifactId, TaskId};
+use crate::artifact::Artifact;
 
 /// A task-scoped run identifier.
 ///
@@ -26,24 +26,20 @@ impl From<&str> for TaskRunId {
 /// Tasks are the sole execution primitive. They may optionally declare
 /// artifact ports (`inputs` / `outputs`) for lineage and control
 /// dependencies (`after`) for ordering without a data product.
-///
-/// Ports reference [`ArtifactId`] (and [`TaskId`] for `after`). Resolve slugs
-/// through an [`crate::Interner`]; the [`crate::Artifact`] type is the catalog
-/// record for a data product.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
-    id: TaskId,
-    inputs: Vec<ArtifactId>,
-    outputs: Vec<ArtifactId>,
-    after: Vec<TaskId>,
+    name: String,
+    inputs: Vec<Artifact>,
+    outputs: Vec<Artifact>,
+    after: Vec<String>,
 }
 
 impl Task {
-    /// Creates a task with the given id and no ports or control deps.
+    /// Creates a task with the given human-readable name and no ports or deps.
     #[must_use]
-    pub fn new(id: TaskId) -> Self {
+    pub fn new(name: impl Into<String>) -> Self {
         Self {
-            id,
+            name: name.into(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             after: Vec::new(),
@@ -52,47 +48,57 @@ impl Task {
 
     /// Sets the artifact inputs for this task.
     #[must_use]
-    pub fn with_inputs(mut self, artifacts: Vec<ArtifactId>) -> Self {
-        self.inputs = artifacts;
+    pub fn with_inputs(mut self, artifacts: impl IntoIterator<Item = Artifact>) -> Self {
+        self.inputs = artifacts.into_iter().collect();
         self
     }
 
     /// Sets the artifact outputs for this task.
     #[must_use]
-    pub fn with_outputs(mut self, artifacts: Vec<ArtifactId>) -> Self {
-        self.outputs = artifacts;
+    pub fn with_outputs(mut self, artifacts: impl IntoIterator<Item = Artifact>) -> Self {
+        self.outputs = artifacts.into_iter().collect();
         self
     }
 
-    /// Sets control dependencies: tasks that must complete before this one.
+    /// Sets control dependencies from other tasks (by name).
     #[must_use]
-    pub fn with_after(mut self, tasks: Vec<TaskId>) -> Self {
-        self.after = tasks;
+    pub fn with_after<'a>(mut self, tasks: impl IntoIterator<Item = &'a Task>) -> Self {
+        self.after = tasks
+            .into_iter()
+            .map(Task::name)
+            .map(str::to_owned)
+            .collect();
         self
     }
 
-    /// Returns this task's id.
+    /// Returns this task's name.
     #[must_use]
-    pub fn id(&self) -> TaskId {
-        self.id
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns this task's artifact inputs.
     #[must_use]
-    pub fn inputs(&self) -> &[ArtifactId] {
+    pub fn inputs(&self) -> &[Artifact] {
         &self.inputs
     }
 
     /// Returns this task's artifact outputs.
     #[must_use]
-    pub fn outputs(&self) -> &[ArtifactId] {
+    pub fn outputs(&self) -> &[Artifact] {
         &self.outputs
     }
 
-    /// Returns control-dependency task ids.
+    /// Returns control-dependency task names.
     #[must_use]
-    pub fn after(&self) -> &[TaskId] {
+    pub fn after(&self) -> &[String] {
         &self.after
+    }
+}
+
+impl fmt::Display for Task {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.name.fmt(f)
     }
 }
 
@@ -123,7 +129,7 @@ pub enum TaskState {
 /// A record of one task's execution within a specific run.
 #[derive(Debug, Clone)]
 pub struct TaskRun {
-    task: TaskId,
+    task: String,
     run_id: TaskRunId,
     state: TaskState,
 }
@@ -131,18 +137,18 @@ pub struct TaskRun {
 impl TaskRun {
     /// Creates a new task run in the [`TaskState::Pending`] state.
     #[must_use]
-    pub fn new(task: TaskId, run_id: TaskRunId) -> Self {
+    pub fn new(task: impl Into<String>, run_id: TaskRunId) -> Self {
         Self {
-            task,
+            task: task.into(),
             run_id,
             state: TaskState::Pending,
         }
     }
 
-    /// Returns the task id for this run.
+    /// Returns the task name for this run.
     #[must_use]
-    pub fn task(&self) -> TaskId {
-        self.task
+    pub fn task(&self) -> &str {
+        &self.task
     }
 
     /// Returns this run's identifier.
@@ -161,39 +167,31 @@ impl TaskRun {
 #[cfg(test)]
 mod tests {
     use super::{Task, TaskRun, TaskRunId, TaskState};
-    use crate::Interner;
+    use crate::artifact::Artifact;
 
     #[test]
     fn task_ports_and_control_deps() {
-        let mut names = Interner::new();
-        let gcs = names.artifact("gcs/users.parquet");
-        let pg = names.artifact("postgres/app/users");
-        let load = names.task("gcs_to_postgres");
-        let index = names.task("create_indexes");
+        let gcs = Artifact::new("gcs/users.parquet");
+        let pg = Artifact::new("postgres/app/users");
+        let load = Task::new("gcs_to_postgres")
+            .with_inputs([gcs])
+            .with_outputs([pg.clone()]);
+        let index = Task::new("create_indexes")
+            .with_inputs([pg])
+            .with_after([&load]);
 
-        let task = Task::new(index)
-            .with_inputs(vec![pg])
-            .with_after(vec![load]);
-
-        assert_eq!(task.id(), index);
-        assert_eq!(names.task_name(task.id()), Some("create_indexes"));
-        assert!(task.outputs().is_empty());
-        assert_eq!(task.inputs(), &[pg]);
-        assert_eq!(task.after(), &[load]);
-
-        let load_task = Task::new(load)
-            .with_inputs(vec![gcs])
-            .with_outputs(vec![pg]);
-        assert_eq!(load_task.outputs().len(), 1);
-        assert_eq!(load_task.inputs().len(), 1);
+        assert_eq!(index.name(), "create_indexes");
+        assert!(index.outputs().is_empty());
+        assert_eq!(index.inputs()[0].slug(), "postgres/app/users");
+        assert_eq!(index.after(), &["gcs_to_postgres".to_owned()]);
+        assert_eq!(load.outputs().len(), 1);
+        assert_eq!(load.inputs().len(), 1);
     }
 
     #[test]
     fn task_run_starts_pending() {
-        let mut names = Interner::new();
-        let vacuum = names.task("vacuum");
-        let run = TaskRun::new(vacuum, TaskRunId::from("vacuum-test"));
-        assert_eq!(run.task(), vacuum);
+        let run = TaskRun::new("vacuum", TaskRunId::from("vacuum-test"));
+        assert_eq!(run.task(), "vacuum");
         assert_eq!(run.run_id().to_string(), "vacuum-test");
         assert_eq!(run.state(), &TaskState::Pending);
     }

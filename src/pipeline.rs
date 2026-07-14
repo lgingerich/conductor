@@ -1,6 +1,5 @@
 use std::fmt;
 
-use crate::intern::PipelineId;
 use crate::task::{Task, TaskRun, TaskRunId};
 
 /// A pipeline-scoped run identifier.
@@ -28,27 +27,56 @@ impl From<&str> for PipelineRunId {
 /// dependencies. A task starts only after its dependencies are satisfied.
 #[derive(Debug, Clone)]
 pub struct Pipeline {
-    id: PipelineId,
+    name: String,
     tasks: Vec<Task>,
 }
 
 impl Pipeline {
-    /// Creates a pipeline with the given id and tasks.
+    /// Creates a pipeline with the given human-readable name and tasks.
     #[must_use]
-    pub fn new(id: PipelineId, tasks: Vec<Task>) -> Self {
-        Self { id, tasks }
+    pub fn new(name: impl Into<String>, tasks: impl IntoIterator<Item = Task>) -> Self {
+        Self {
+            name: name.into(),
+            tasks: tasks.into_iter().collect(),
+        }
     }
 
-    /// Returns this pipeline's id.
+    /// Returns this pipeline's name.
     #[must_use]
-    pub fn id(&self) -> PipelineId {
-        self.id
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Returns the tasks in this pipeline.
     #[must_use]
     pub fn tasks(&self) -> &[Task] {
         &self.tasks
+    }
+
+    /// Creates a pending run of this pipeline.
+    ///
+    /// Seeds one [`TaskRun`] per task. Task run ids default to each task's
+    /// name (unique within a single pipeline run). Does not execute anything
+    /// yet — that needs the in-process runner from the roadmap.
+    #[must_use]
+    pub fn run(&self, run_id: impl AsRef<str>) -> PipelineRun {
+        let tasks = self
+            .tasks
+            .iter()
+            .map(|task| TaskRun::new(task.name(), TaskRunId::from(task.name())))
+            .collect();
+
+        PipelineRun {
+            pipeline: self.name.clone(),
+            run_id: PipelineRunId::from(run_id.as_ref()),
+            tasks,
+        }
+    }
+}
+
+impl fmt::Display for Pipeline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.name.fmt(f)
     }
 }
 
@@ -58,7 +86,7 @@ impl Pipeline {
 /// per-task [`TaskRun`] outcomes.
 #[derive(Debug, Clone)]
 pub struct PipelineRun {
-    pipeline: PipelineId,
+    pipeline: String,
     run_id: PipelineRunId,
     tasks: Vec<TaskRun>,
 }
@@ -66,9 +94,9 @@ pub struct PipelineRun {
 impl PipelineRun {
     /// Creates an empty pipeline run with no task runs seeded.
     #[must_use]
-    pub fn new(pipeline: PipelineId, run_id: PipelineRunId) -> Self {
+    pub fn new(pipeline: impl Into<String>, run_id: PipelineRunId) -> Self {
         Self {
-            pipeline,
+            pipeline: pipeline.into(),
             run_id,
             tasks: Vec::new(),
         }
@@ -76,8 +104,10 @@ impl PipelineRun {
 
     /// Creates a pipeline run seeded with one pending [`TaskRun`] per task.
     ///
-    /// `task_run_ids` must have the same length as `pipeline.tasks()`; each
-    /// id is caller-supplied (no generated defaults).
+    /// Prefer [`Pipeline::run`] when task run ids can default to each task's
+    /// name. Use this when you need caller-supplied task run ids.
+    ///
+    /// `task_run_ids` must have the same length as `pipeline.tasks()`.
     #[must_use]
     pub fn from_pipeline(
         pipeline: &Pipeline,
@@ -93,20 +123,20 @@ impl PipelineRun {
             .tasks()
             .iter()
             .zip(task_run_ids)
-            .map(|(task, task_run_id)| TaskRun::new(task.id(), task_run_id))
+            .map(|(task, task_run_id)| TaskRun::new(task.name(), task_run_id))
             .collect();
 
         Some(Self {
-            pipeline: pipeline.id(),
+            pipeline: pipeline.name().to_owned(),
             run_id,
             tasks,
         })
     }
 
-    /// Returns the pipeline id for this run.
+    /// Returns the pipeline name for this run.
     #[must_use]
-    pub fn pipeline(&self) -> PipelineId {
-        self.pipeline
+    pub fn pipeline(&self) -> &str {
+        &self.pipeline
     }
 
     /// Returns this run's identifier.
@@ -125,44 +155,30 @@ impl PipelineRun {
 #[cfg(test)]
 mod tests {
     use super::{Pipeline, PipelineRun, PipelineRunId};
-    use crate::Interner;
+    use crate::artifact::Artifact;
     use crate::task::{Task, TaskRunId, TaskState};
 
     #[test]
-    fn from_pipeline_seeds_one_pending_run_per_task() {
-        let mut names = Interner::new();
-        let gcs = names.artifact("gcs/users.parquet");
-        let pg = names.artifact("postgres/app/users");
-        let load_id = names.task("gcs_to_postgres");
-        let index_id = names.task("create_indexes");
-        let pipeline_id = names.pipeline("load");
+    fn run_seeds_one_pending_run_per_task() {
+        let gcs = Artifact::new("gcs/users.parquet");
+        let pg = Artifact::new("postgres/app/users");
+        let load = Task::new("gcs_to_postgres")
+            .with_inputs([gcs])
+            .with_outputs([pg.clone()]);
+        let index = Task::new("create_indexes")
+            .with_inputs([pg])
+            .with_after([&load]);
 
-        let load = Task::new(load_id)
-            .with_inputs(vec![gcs])
-            .with_outputs(vec![pg]);
-        let index = Task::new(index_id)
-            .with_inputs(vec![pg])
-            .with_after(vec![load_id]);
+        let pipeline = Pipeline::new("load", [load, index]);
+        let run = pipeline.run("load-test");
 
-        let pipeline = Pipeline::new(pipeline_id, vec![load, index]);
-        let Some(run) = PipelineRun::from_pipeline(
-            &pipeline,
-            PipelineRunId::from("load-test"),
-            [
-                TaskRunId::from("gcs_to_postgres-run"),
-                TaskRunId::from("create_indexes-run"),
-            ],
-        ) else {
-            panic!("task run id count should match")
-        };
-
-        assert_eq!(run.pipeline(), pipeline_id);
-        assert_eq!(names.pipeline_name(run.pipeline()), Some("load"));
+        assert_eq!(run.pipeline(), "load");
         assert_eq!(run.run_id().to_string(), "load-test");
         assert_eq!(run.tasks().len(), 2);
-        assert_eq!(run.tasks()[0].task(), load_id);
-        assert_eq!(run.tasks()[1].task(), index_id);
-        assert_eq!(run.tasks()[0].run_id().to_string(), "gcs_to_postgres-run");
+        assert_eq!(run.tasks()[0].task(), "gcs_to_postgres");
+        assert_eq!(run.tasks()[1].task(), "create_indexes");
+        assert_eq!(run.tasks()[0].run_id().to_string(), "gcs_to_postgres");
+        assert_eq!(run.tasks()[1].run_id().to_string(), "create_indexes");
         assert!(
             run.tasks()
                 .iter()
@@ -171,11 +187,21 @@ mod tests {
     }
 
     #[test]
+    fn from_pipeline_seeds_custom_task_run_ids() {
+        let pipeline = Pipeline::new("load", [Task::new("only")]);
+        let Some(run) = PipelineRun::from_pipeline(
+            &pipeline,
+            PipelineRunId::from("load-test"),
+            [TaskRunId::from("only-custom")],
+        ) else {
+            panic!("task run id count should match")
+        };
+        assert_eq!(run.tasks()[0].run_id().to_string(), "only-custom");
+    }
+
+    #[test]
     fn from_pipeline_rejects_mismatched_task_run_id_count() {
-        let mut names = Interner::new();
-        let pipeline_id = names.pipeline("load");
-        let task_id = names.task("only");
-        let pipeline = Pipeline::new(pipeline_id, vec![Task::new(task_id)]);
+        let pipeline = Pipeline::new("load", [Task::new("only")]);
         assert!(
             PipelineRun::from_pipeline(&pipeline, PipelineRunId::from("load-test"), []).is_none()
         );
@@ -183,22 +209,15 @@ mod tests {
 
     #[test]
     fn empty_pipeline_run_has_no_tasks() {
-        let mut names = Interner::new();
-        let pipeline_id = names.pipeline("empty");
-        let pipeline = Pipeline::new(pipeline_id, vec![]);
-        let Some(run) = PipelineRun::from_pipeline(&pipeline, PipelineRunId::from("empty-run"), [])
-        else {
-            panic!("empty pipeline should accept empty task run ids")
-        };
+        let pipeline = Pipeline::new("empty", []);
+        let run = pipeline.run("empty-run");
         assert!(run.tasks().is_empty());
         assert_eq!(run.run_id().to_string(), "empty-run");
     }
 
     #[test]
     fn new_pipeline_run_starts_empty() {
-        let mut names = Interner::new();
-        let pipeline_id = names.pipeline("load");
-        let run = PipelineRun::new(pipeline_id, PipelineRunId::from("empty-seed"));
+        let run = PipelineRun::new("load", PipelineRunId::from("empty-seed"));
         assert!(run.tasks().is_empty());
     }
 }

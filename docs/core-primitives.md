@@ -201,15 +201,16 @@ ETL. Vacuum stays a plain Task.
 
 ## Naming
 
-| Concept | Name |
-|---------|------|
-| Runnable | `Task` / `TaskId` |
-| Data identity | `Artifact` / `ArtifactId` (+ slug in `Interner`) |
-| Composition / schedule unit | `Pipeline` / `PipelineId` |
-| Non-data mutation declaration | `Effect` (optional metadata on Task) |
+| Concept | Public API | Internal (planner/runner) |
+|---------|------------|---------------------------|
+| Runnable | `Task` (named with a slug) | `TaskId` via `Interner` |
+| Data identity | `Artifact::new("…")` | `ArtifactId` via `Interner` |
+| Composition | `Pipeline` (named with a slug) | `PipelineId` via `Interner` |
+| Non-data mutation | `Effect` (later) | — |
 
-Graphs and task ports use dense ids (`ArtifactId`, `TaskId`, …). `Artifact` is
-the catalog record for a data product; slugs live in the interner.
+Users work with slugs and values (`Artifact`, `Task`, `Pipeline`). Dense ids and
+the `Interner` are process-local implementation details for scheduling hot
+paths — not part of the definition API.
 
 ## Non-goals (for the primitive itself)
 
