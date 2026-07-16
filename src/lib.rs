@@ -11,7 +11,7 @@ mod graph;
 mod pipeline;
 mod task;
 
-pub use artifact::{Artifact, InvalidArtifactReason};
+pub use artifact::Artifact;
 pub use errors::{GraphError, TransitionError};
 pub use graph::{EdgeKind, GraphEdge, TaskGraph};
 pub use pipeline::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
