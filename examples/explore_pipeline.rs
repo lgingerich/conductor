@@ -27,8 +27,8 @@ fn main() {
     let r1080 = Artifact::new("s3/renditions/episode-42/1080p.mp4");
     let r720 = Artifact::new("s3/renditions/episode-42/720p.mp4");
     let audio = Artifact::new("s3/renditions/episode-42/audio.m4a");
-    let hls = Artifact::new("s3/packages/episode-42/hls/");
-    let origin = Artifact::new("cdn/origin/vod/episode-42/");
+    let hls = Artifact::new("s3/packages/episode-42/hls");
+    let origin = Artifact::new("cdn/origin/vod/episode-42");
 
     // Ingest + validate (linear data)
     let ingest_master = Task::new("ingest_master").with_outputs([master.clone()]);
