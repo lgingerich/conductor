@@ -194,10 +194,13 @@ Primary surface is a **catalog of Artifacts**, not a list of Pipelines or
 Tasks. Effect-only Tasks appear under related Artifact maintenance and in
 run/pipeline views — not as sibling data-catalog entries.
 
-## Authoring sugar (later)
+## Automatic authoring (later)
 
-Dagster-like `@artifact(...)` can compile down to Task + Artifact for pure
-ETL. Vacuum stays a plain Task.
+The preferred authoring path should derive Task inputs and outputs from
+mediated Artifact reads and writes, then compile them down to this same
+Task + Artifact model. Explicit ports remain the escape hatch; vacuum and
+other non-data work stay Tasks. See
+[`automatic-artifact-dependencies.md`](automatic-artifact-dependencies.md).
 
 ## Naming
 
