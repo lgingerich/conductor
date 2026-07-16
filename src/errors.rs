@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use crate::graph::EdgeKind;
-use crate::task::TaskName;
+use crate::task::{TaskName, TaskState};
 
 /// Errors from compiling a [`Pipeline`](crate::Pipeline) into a [`TaskGraph`](crate::TaskGraph).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -49,4 +49,17 @@ fn format_cycle_path(path: &[TaskName]) -> String {
         out.push_str(name.as_str());
     }
     out
+}
+
+/// Errors from driving a [`TaskRun`](crate::TaskRun) through its state machine.
+#[derive(Debug, PartialEq, Eq, Error)]
+pub enum TransitionError {
+    /// The task was not in a state that allows the attempted transition.
+    #[error("illegal transition: cannot {attempted} a task in the {from} state")]
+    IllegalTransition {
+        /// The state the task was in when the transition was attempted.
+        from: TaskState,
+        /// The transition that was attempted (`"start"`, `"complete"`, etc.).
+        attempted: &'static str,
+    },
 }

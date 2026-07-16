@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::errors::GraphError;
 use crate::graph::TaskGraph;
-use crate::task::{Task, TaskRun, TaskRunId};
+use crate::task::{Task, TaskName, TaskRun, TaskRunId};
 
 /// Stable human-readable identity for a [`Pipeline`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -177,6 +177,15 @@ impl PipelineRun {
     #[must_use]
     pub fn tasks(&self) -> &[TaskRun] {
         &self.tasks
+    }
+
+    /// Looks up a task run by task name for mutation (e.g. to drive its state
+    /// machine). Returns `None` if no task in the run has that name.
+    #[must_use]
+    pub fn task_mut(&mut self, name: &TaskName) -> Option<&mut TaskRun> {
+        self.tasks
+            .iter_mut()
+            .find(|task_run| task_run.task() == name)
     }
 }
 

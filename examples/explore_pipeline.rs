@@ -125,9 +125,10 @@ fn main() {
     for task_run in run.tasks() {
         let state = match task_run.state() {
             TaskState::Pending => "Pending",
-            TaskState::Running { .. } => "Running",
-            TaskState::Completed { .. } => "Completed",
+            TaskState::Running => "Running",
+            TaskState::Completed => "Completed",
             TaskState::Failed { .. } => "Failed",
+            TaskState::Skipped => "Skipped",
         };
         println!(
             "  • {}  run_id={}  state={state}",
