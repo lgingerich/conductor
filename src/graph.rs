@@ -88,8 +88,8 @@ impl TaskGraph {
         let by_name = Self::index_task_names(&tasks);
 
         Self::validate_after_targets(&tasks, &by_name)?;
-        let edges = Self::collect_edges(&tasks, &by_name)?;
-        let (upstream, downstream, indegree) = Self::build_adjacency(&edges, &by_name, tasks.len());
+        let (edges, upstream, downstream, indegree) =
+            Self::collect_edges(&tasks, &by_name, tasks.len())?;
         let topological_order = Self::topological_sort(&tasks, &downstream, indegree)?;
 
         Ok(Self {
@@ -243,10 +243,16 @@ impl TaskGraph {
         Ok(())
     }
 
+    /// Collects edges and builds adjacency lists in one pass.
+    ///
+    /// Pair-uniqueness is known at insertion time (the `EdgeIndex` rejects
+    /// duplicate pairs), so adjacency is recorded there rather than re-scanned
+    /// from the edge list.
     fn collect_edges(
         tasks: &[Task],
         by_name: &HashMap<TaskName, usize>,
-    ) -> Result<Vec<GraphEdge>, GraphError> {
+        n: usize,
+    ) -> Result<(Vec<GraphEdge>, Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<usize>), GraphError> {
         // Artifact slug → indices of tasks that produce it.
         let mut producers: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, task) in tasks.iter().enumerate() {
@@ -259,6 +265,9 @@ impl TaskGraph {
         }
 
         let mut edges = Vec::new();
+        let mut upstream = vec![Vec::new(); n];
+        let mut downstream = vec![Vec::new(); n];
+        let mut indegree = vec![0usize; n];
         let mut index = EdgeIndex::default();
 
         for (to_idx, task) in tasks.iter().enumerate() {
@@ -267,38 +276,23 @@ impl TaskGraph {
                     continue;
                 };
                 for &from_idx in from_idxs {
-                    index.insert_data(&mut edges, tasks, from_idx, to_idx, artifact.clone())?;
+                    if index.insert_data(&mut edges, tasks, from_idx, to_idx, artifact.clone())? {
+                        upstream[to_idx].push(from_idx);
+                        downstream[from_idx].push(to_idx);
+                        indegree[to_idx] += 1;
+                    }
                 }
             }
             for after in task.after() {
                 let from_idx = by_name[after];
-                index.insert_control(&mut edges, tasks, from_idx, to_idx)?;
+                if index.insert_control(&mut edges, tasks, from_idx, to_idx)? {
+                    upstream[to_idx].push(from_idx);
+                    downstream[from_idx].push(to_idx);
+                    indegree[to_idx] += 1;
+                }
             }
         }
-        Ok(edges)
-    }
-
-    fn build_adjacency(
-        edges: &[GraphEdge],
-        by_name: &HashMap<TaskName, usize>,
-        n: usize,
-    ) -> (Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<usize>) {
-        let mut upstream = vec![Vec::new(); n];
-        let mut downstream = vec![Vec::new(); n];
-        let mut indegree = vec![0usize; n];
-
-        for edge in edges {
-            let from_u = by_name[edge.from()];
-            let to_u = by_name[edge.to()];
-            if !upstream[to_u].contains(&from_u) {
-                upstream[to_u].push(from_u);
-                indegree[to_u] += 1;
-            }
-            if !downstream[from_u].contains(&to_u) {
-                downstream[from_u].push(to_u);
-            }
-        }
-        (upstream, downstream, indegree)
+        Ok((edges, upstream, downstream, indegree))
     }
 
     fn topological_sort(
@@ -418,13 +412,15 @@ struct EdgeIndex {
 }
 
 impl EdgeIndex {
+    /// Inserts a control edge. Returns `true` if the `(from, to)` pair was
+    /// newly recorded (always `true` on `Ok` — a duplicate pair errors).
     fn insert_control(
         &mut self,
         edges: &mut Vec<GraphEdge>,
         tasks: &[Task],
         from: usize,
         to: usize,
-    ) -> Result<(), GraphError> {
+    ) -> Result<bool, GraphError> {
         if self.control_pairs.contains(&(from, to)) || self.data_pairs.contains(&(from, to)) {
             return Err(GraphError::DuplicateEdge {
                 from: tasks[from].name().clone(),
@@ -438,9 +434,12 @@ impl EdgeIndex {
             to: tasks[to].name().clone(),
             kind: EdgeKind::Control,
         });
-        Ok(())
+        Ok(true)
     }
 
+    /// Inserts a data edge. Returns `true` if the `(from, to)` pair was newly
+    /// recorded (multiple artifacts on the same pair return `false` for the
+    /// second onward, so adjacency isn't double-counted).
     fn insert_data(
         &mut self,
         edges: &mut Vec<GraphEdge>,
@@ -448,7 +447,7 @@ impl EdgeIndex {
         from: usize,
         to: usize,
         artifact: Artifact,
-    ) -> Result<(), GraphError> {
+    ) -> Result<bool, GraphError> {
         let key = (from, to, artifact.slug().to_owned());
         if self.data_keys.contains(&key) || self.control_pairs.contains(&(from, to)) {
             return Err(GraphError::DuplicateEdge {
@@ -457,6 +456,7 @@ impl EdgeIndex {
                 kind: EdgeKind::Data { artifact },
             });
         }
+        let pair_is_new = !self.data_pairs.contains(&(from, to));
         self.data_keys.insert(key);
         self.data_pairs.insert((from, to));
         edges.push(GraphEdge {
@@ -464,7 +464,7 @@ impl EdgeIndex {
             to: tasks[to].name().clone(),
             kind: EdgeKind::Data { artifact },
         });
-        Ok(())
+        Ok(pair_is_new)
     }
 }
 
