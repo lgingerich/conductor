@@ -2,6 +2,7 @@
 
 use thiserror::Error;
 
+use crate::artifact::{Artifact, InvalidArtifactReason};
 use crate::graph::EdgeKind;
 use crate::task::{TaskName, TaskState};
 
@@ -31,6 +32,14 @@ pub enum GraphError {
         to: TaskName,
         /// Kind of the edge that could not be inserted.
         kind: EdgeKind,
+    },
+    /// An artifact slug failed validation.
+    #[error("invalid artifact slug `{artifact}`: {reason}")]
+    InvalidArtifact {
+        /// The artifact whose slug is invalid.
+        artifact: Artifact,
+        /// Why the slug is invalid.
+        reason: InvalidArtifactReason,
     },
     /// The dependency graph contains a cycle.
     #[error("cycle in task graph: {}", format_cycle_path(.path))]

@@ -95,6 +95,7 @@ impl TaskGraph {
         let by_name = Self::index_task_names(&tasks);
 
         Self::validate_after_targets(&tasks, &by_name)?;
+        Self::validate_artifact_slugs(&tasks)?;
         let (edges, upstream, downstream, indegree) =
             Self::collect_edges(&tasks, &by_name, tasks.len())?;
         let topological_order = Self::topological_sort(&tasks, &downstream, indegree)?;
@@ -260,6 +261,21 @@ impl TaskGraph {
                     return Err(GraphError::UnknownAfter {
                         task: task.name().clone(),
                         missing: after.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validates every task's input/output artifact slugs.
+    fn validate_artifact_slugs(tasks: &[Task]) -> Result<(), GraphError> {
+        for task in tasks {
+            for artifact in task.inputs().iter().chain(task.outputs()) {
+                if let Err(reason) = artifact.validate_slug() {
+                    return Err(GraphError::InvalidArtifact {
+                        artifact: artifact.clone(),
+                        reason,
                     });
                 }
             }
@@ -644,6 +660,17 @@ mod tests {
                 missing: TaskName::from("missing"),
             }
         );
+    }
+
+    #[test]
+    fn invalid_artifact_slug_errors() {
+        let bad = Artifact::new("a//b");
+        let a = Task::new("a").with_outputs([bad]);
+        let pipeline = Pipeline::new("p", [a]);
+        assert!(matches!(
+            assert_err(&pipeline),
+            GraphError::InvalidArtifact { .. }
+        ));
     }
 
     #[test]
