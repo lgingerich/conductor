@@ -167,7 +167,8 @@ pub struct PipelineRun {
 impl PipelineRun {
     /// Creates a pending run of `graph`, seeding one [`TaskRun`] per task.
     ///
-    /// Task run ids default to each task's name (unique within a single run).
+    /// Each task run id is composed as `{run_id}/{task_name}`, so it is unique
+    /// across runs as long as the supplied `run_id` is unique.
     /// The run references the plan via [`Arc`], so multiple runs can share one
     /// graph cheaply. Does not execute anything yet — that needs the in-process
     /// runner from the roadmap.
@@ -199,7 +200,11 @@ impl PipelineRun {
         let tasks = graph
             .tasks()
             .iter()
-            .map(|task| TaskRun::new(task.name().clone(), TaskRunId::from(task.name().as_str())))
+            .map(|task| {
+                let name = task.name();
+                let task_run_id = TaskRunId::new(format!("{run_id}/{name}"));
+                TaskRun::new(name.clone(), task_run_id)
+            })
             .collect();
 
         Self {
@@ -280,8 +285,14 @@ mod tests {
         assert_eq!(run.tasks().len(), 2);
         assert_eq!(run.tasks()[0].task().as_str(), "gcs_to_postgres");
         assert_eq!(run.tasks()[1].task().as_str(), "create_indexes");
-        assert_eq!(run.tasks()[0].run_id().to_string(), "gcs_to_postgres");
-        assert_eq!(run.tasks()[1].run_id().to_string(), "create_indexes");
+        assert_eq!(
+            run.tasks()[0].run_id().to_string(),
+            "load-test/gcs_to_postgres"
+        );
+        assert_eq!(
+            run.tasks()[1].run_id().to_string(),
+            "load-test/create_indexes"
+        );
         assert!(
             run.tasks()
                 .iter()
