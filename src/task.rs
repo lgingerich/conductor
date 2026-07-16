@@ -1,5 +1,5 @@
+use jiff::Timestamp;
 use std::fmt;
-use std::time::Instant;
 
 use crate::artifact::Artifact;
 use crate::errors::TransitionError;
@@ -228,9 +228,9 @@ pub struct TaskRun {
     run_id: TaskRunId,
     state: TaskState,
     /// When the task entered the running state (`None` until `start`).
-    started_at: Option<Instant>,
+    started_at: Option<Timestamp>,
     /// When the task reached a terminal state (`None` until complete/fail/skip).
-    finished_at: Option<Instant>,
+    finished_at: Option<Timestamp>,
 }
 
 impl TaskRun {
@@ -279,13 +279,13 @@ impl TaskRun {
 
     /// Returns when the task entered the running state, if it has started.
     #[must_use]
-    pub fn started_at(&self) -> Option<Instant> {
+    pub fn started_at(&self) -> Option<Timestamp> {
         self.started_at
     }
 
     /// Returns when the task reached a terminal state, if it has finished.
     #[must_use]
-    pub fn finished_at(&self) -> Option<Instant> {
+    pub fn finished_at(&self) -> Option<Timestamp> {
         self.finished_at
     }
 
@@ -294,7 +294,7 @@ impl TaskRun {
     /// # Errors
     ///
     /// Returns [`TransitionError`] if the task is not `Pending`.
-    pub fn start(&mut self, at: Instant) -> Result<(), TransitionError> {
+    pub fn start(&mut self, at: Timestamp) -> Result<(), TransitionError> {
         self.apply(Transition::Start, at)
     }
 
@@ -303,7 +303,7 @@ impl TaskRun {
     /// # Errors
     ///
     /// Returns [`TransitionError`] if the task is not `Running`.
-    pub fn complete(&mut self, at: Instant) -> Result<(), TransitionError> {
+    pub fn complete(&mut self, at: Timestamp) -> Result<(), TransitionError> {
         self.apply(Transition::Complete, at)
     }
 
@@ -312,7 +312,7 @@ impl TaskRun {
     /// # Errors
     ///
     /// Returns [`TransitionError`] if the task is not `Running`.
-    pub fn fail(&mut self, at: Instant, error: String) -> Result<(), TransitionError> {
+    pub fn fail(&mut self, at: Timestamp, error: String) -> Result<(), TransitionError> {
         self.apply(Transition::Fail { error }, at)
     }
 
@@ -322,7 +322,7 @@ impl TaskRun {
     /// # Errors
     ///
     /// Returns [`TransitionError`] if the task is not `Pending`.
-    pub fn skip(&mut self, at: Instant) -> Result<(), TransitionError> {
+    pub fn skip(&mut self, at: Timestamp) -> Result<(), TransitionError> {
         self.apply(Transition::Skip, at)
     }
 
@@ -344,7 +344,7 @@ impl TaskRun {
     }
 
     /// Applies a transition: validates it, updates state, and records timing.
-    fn apply(&mut self, transition: Transition, at: Instant) -> Result<(), TransitionError> {
+    fn apply(&mut self, transition: Transition, at: Timestamp) -> Result<(), TransitionError> {
         // Start sets started_at; every other transition sets finished_at. Capture
         // before `transition` is moved into `next_state`.
         let starts = matches!(transition, Transition::Start);
@@ -383,7 +383,7 @@ impl Transition {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use jiff::Timestamp;
 
     use super::{Task, TaskName, TaskRun, TaskRunId, TaskState};
     use crate::artifact::Artifact;
@@ -425,13 +425,13 @@ mod tests {
     #[test]
     fn pending_to_running_to_completed() {
         let mut run = TaskRun::new("load", TaskRunId::from("load-1"));
-        let started = Instant::now();
+        let started = Timestamp::now();
         transition_ok(run.start(started), "Pending -> Running is legal");
         assert_eq!(run.state(), &TaskState::Running);
         assert_eq!(run.started_at(), Some(started));
         assert!(run.finished_at().is_none());
 
-        let finished = Instant::now();
+        let finished = Timestamp::now();
         transition_ok(run.complete(finished), "Running -> Completed is legal");
         assert_eq!(run.state(), &TaskState::Completed);
         assert_eq!(run.started_at(), Some(started));
@@ -441,8 +441,8 @@ mod tests {
     #[test]
     fn pending_to_running_to_failed() {
         let mut run = TaskRun::new("load", TaskRunId::from("load-1"));
-        transition_ok(run.start(Instant::now()), "start");
-        let finished = Instant::now();
+        transition_ok(run.start(Timestamp::now()), "start");
+        let finished = Timestamp::now();
         transition_ok(
             run.fail(finished, "boom".to_owned()),
             "Running -> Failed is legal",
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn pending_to_skipped() {
         let mut run = TaskRun::new("index", TaskRunId::from("index-1"));
-        let skipped_at = Instant::now();
+        let skipped_at = Timestamp::now();
         transition_ok(run.skip(skipped_at), "Pending -> Skipped is legal");
         assert_eq!(run.state(), &TaskState::Skipped);
         // Skipped never started, so started_at stays None.
@@ -472,7 +472,7 @@ mod tests {
         // complete on a Pending task (never started)
         let mut run = TaskRun::new("load", TaskRunId::from("load-1"));
         assert_eq!(
-            run.complete(Instant::now()),
+            run.complete(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Pending,
                 attempted: "complete",
@@ -480,9 +480,9 @@ mod tests {
         );
 
         // start on an already-Running task
-        transition_ok(run.start(Instant::now()), "first start is legal");
+        transition_ok(run.start(Timestamp::now()), "first start is legal");
         assert_eq!(
-            run.start(Instant::now()),
+            run.start(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Running,
                 attempted: "start",
@@ -491,7 +491,7 @@ mod tests {
 
         // skip on a Running task (must be Pending to skip)
         assert_eq!(
-            run.skip(Instant::now()),
+            run.skip(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Running,
                 attempted: "skip",
@@ -502,26 +502,26 @@ mod tests {
     #[test]
     fn terminal_states_reject_all_transitions() {
         let mut run = TaskRun::new("load", TaskRunId::from("load-1"));
-        transition_ok(run.start(Instant::now()), "start");
-        transition_ok(run.complete(Instant::now()), "complete");
+        transition_ok(run.start(Timestamp::now()), "start");
+        transition_ok(run.complete(Timestamp::now()), "complete");
 
         // Completed is terminal: every transition is illegal.
         assert_eq!(
-            run.start(Instant::now()),
+            run.start(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Completed,
                 attempted: "start",
             })
         );
         assert_eq!(
-            run.complete(Instant::now()),
+            run.complete(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Completed,
                 attempted: "complete",
             })
         );
         assert_eq!(
-            run.skip(Instant::now()),
+            run.skip(Timestamp::now()),
             Err(TransitionError::IllegalTransition {
                 from: TaskState::Completed,
                 attempted: "skip",
@@ -548,7 +548,7 @@ mod tests {
             // start: legal only Pending -> Running
             let mut run = TaskRun::new("t", TaskRunId::from("r"));
             run.state = from.clone();
-            let res = run.start(Instant::now());
+            let res = run.start(Timestamp::now());
             if from == TaskState::Pending {
                 assert_eq!(res, Ok(()));
                 assert_eq!(run.state(), &TaskState::Running);
@@ -565,7 +565,7 @@ mod tests {
             // complete: legal only Running -> Completed
             let mut run = TaskRun::new("t", TaskRunId::from("r"));
             run.state = from.clone();
-            let res = run.complete(Instant::now());
+            let res = run.complete(Timestamp::now());
             if from == TaskState::Running {
                 assert_eq!(res, Ok(()));
                 assert_eq!(run.state(), &TaskState::Completed);
@@ -582,7 +582,7 @@ mod tests {
             // fail: legal only Running -> Failed
             let mut run = TaskRun::new("t", TaskRunId::from("r"));
             run.state = from.clone();
-            let res = run.fail(Instant::now(), "e".to_owned());
+            let res = run.fail(Timestamp::now(), "e".to_owned());
             if from == TaskState::Running {
                 assert_eq!(res, Ok(()));
                 assert_eq!(
@@ -604,7 +604,7 @@ mod tests {
             // skip: legal only Pending -> Skipped
             let mut run = TaskRun::new("t", TaskRunId::from("r"));
             run.state = from.clone();
-            let res = run.skip(Instant::now());
+            let res = run.skip(Timestamp::now());
             if from == TaskState::Pending {
                 assert_eq!(res, Ok(()));
                 assert_eq!(run.state(), &TaskState::Skipped);
