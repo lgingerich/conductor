@@ -1,14 +1,14 @@
 //! Pipeline-local task dependency graph.
 //!
 //! Compiles [`Task`](crate::Task) input/output ports and `after` deps into a
-//! validated DAG. See `docs/core-primitives.md`.
+//! validated DAG. Edges and queries are name-based; the graph stores a
+//! name→index map for O(1) lookups. See `docs/core-primitives.md`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use crate::artifact::Artifact;
 use crate::errors::GraphError;
-use crate::intern::{ArtifactId, Interner, TaskId};
 use crate::pipeline::{Pipeline, PipelineName};
 use crate::task::{Task, TaskName};
 
@@ -35,16 +35,29 @@ impl fmt::Display for EdgeKind {
 
 /// A directed dependency edge between two tasks in a [`TaskGraph`].
 ///
-/// Endpoints are dense process-local task ids. Resolve them through the owning
-/// graph with [`TaskGraph::edge_from`] / [`TaskGraph::edge_to`].
+/// Endpoints are the human-readable task names; resolve them to [`Task`]s
+/// through the owning graph with [`TaskGraph::edge_from`] /
+/// [`TaskGraph::edge_to`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEdge {
-    from: TaskId,
-    to: TaskId,
+    from: TaskName,
+    to: TaskName,
     kind: EdgeKind,
 }
 
 impl GraphEdge {
+    /// Returns the upstream task name for this edge.
+    #[must_use]
+    pub fn from(&self) -> &TaskName {
+        &self.from
+    }
+
+    /// Returns the downstream task name for this edge.
+    #[must_use]
+    pub fn to(&self) -> &TaskName {
+        &self.to
+    }
+
     /// Returns why this edge exists.
     #[must_use]
     pub fn kind(&self) -> &EdgeKind {
@@ -56,31 +69,33 @@ impl GraphEdge {
 #[derive(Debug, Clone)]
 pub struct TaskGraph {
     pipeline: PipelineName,
-    /// Tasks in declaration order (index == dense [`TaskId`]).
+    /// Tasks in declaration order.
     tasks: Vec<Task>,
+    /// Task name → index into `tasks`, for O(1) lookup.
+    by_name: HashMap<TaskName, usize>,
     edges: Vec<GraphEdge>,
-    /// Unique upstream task ids per task (for ready-set).
-    upstream: Vec<Vec<TaskId>>,
-    /// Unique downstream task ids per task.
-    downstream: Vec<Vec<TaskId>>,
-    topological_order: Vec<TaskId>,
+    /// Unique upstream task indices per task (for ready-set).
+    upstream: Vec<Vec<usize>>,
+    /// Unique downstream task indices per task.
+    downstream: Vec<Vec<usize>>,
+    topological_order: Vec<usize>,
 }
 
 impl TaskGraph {
     /// Compiles a pipeline into a validated task dependency graph.
     pub(crate) fn from_pipeline(pipeline: &Pipeline) -> Result<Self, GraphError> {
-        let mut interner = Interner::new();
-        let tasks = Self::collect_tasks(pipeline, &mut interner)?;
-        let name_to_id = Self::index_task_names(&tasks);
+        let tasks = Self::collect_tasks(pipeline)?;
+        let by_name = Self::index_task_names(&tasks);
 
-        Self::validate_after_targets(&tasks, &name_to_id)?;
-        let edges = Self::collect_edges(&tasks, &name_to_id, &mut interner)?;
-        let (upstream, downstream, indegree) = Self::build_adjacency(&edges, tasks.len());
+        Self::validate_after_targets(&tasks, &by_name)?;
+        let edges = Self::collect_edges(&tasks, &by_name)?;
+        let (upstream, downstream, indegree) = Self::build_adjacency(&edges, &by_name, tasks.len());
         let topological_order = Self::topological_sort(&tasks, &downstream, indegree)?;
 
         Ok(Self {
             pipeline: pipeline.name().clone(),
             tasks,
+            by_name,
             edges,
             upstream,
             downstream,
@@ -109,13 +124,15 @@ impl TaskGraph {
     /// Resolves an edge's upstream task.
     #[must_use]
     pub fn edge_from(&self, edge: &GraphEdge) -> &Task {
-        &self.tasks[edge.from.as_usize()]
+        let idx = self.by_name[edge.from()];
+        &self.tasks[idx]
     }
 
     /// Resolves an edge's downstream task.
     #[must_use]
     pub fn edge_to(&self, edge: &GraphEdge) -> &Task {
-        &self.tasks[edge.to.as_usize()]
+        let idx = self.by_name[edge.to()];
+        &self.tasks[idx]
     }
 
     /// Returns tasks in topological order (declaration order among ties).
@@ -123,7 +140,7 @@ impl TaskGraph {
     pub fn topological_order(&self) -> Vec<&Task> {
         self.topological_order
             .iter()
-            .map(|id| &self.tasks[id.as_usize()])
+            .map(|&idx| &self.tasks[idx])
             .collect()
     }
 
@@ -133,7 +150,7 @@ impl TaskGraph {
         self.tasks
             .iter()
             .enumerate()
-            .filter(|(id, _)| self.upstream[*id].is_empty())
+            .filter(|(idx, _)| self.upstream[*idx].is_empty())
             .map(|(_, task)| task)
             .collect()
     }
@@ -141,17 +158,17 @@ impl TaskGraph {
     /// Looks up a task by name.
     #[must_use]
     pub fn get(&self, name: &TaskName) -> Option<&Task> {
-        self.task_id(name).map(|id| &self.tasks[id.as_usize()])
+        self.by_name.get(name).map(|&idx| &self.tasks[idx])
     }
 
     /// Returns unique upstream tasks for `task`, or `None` if unknown.
     #[must_use]
     pub fn upstream(&self, task: &TaskName) -> Option<Vec<&Task>> {
-        let id = self.task_id(task)?;
+        let &idx = self.by_name.get(task)?;
         Some(
-            self.upstream[id.as_usize()]
+            self.upstream[idx]
                 .iter()
-                .map(|up| &self.tasks[up.as_usize()])
+                .map(|&up| &self.tasks[up])
                 .collect(),
         )
     }
@@ -159,11 +176,11 @@ impl TaskGraph {
     /// Returns unique downstream tasks for `task`, or `None` if unknown.
     #[must_use]
     pub fn downstream(&self, task: &TaskName) -> Option<Vec<&Task>> {
-        let id = self.task_id(task)?;
+        let &idx = self.by_name.get(task)?;
         Some(
-            self.downstream[id.as_usize()]
+            self.downstream[idx]
                 .iter()
-                .map(|down| &self.tasks[down.as_usize()])
+                .map(|&down| &self.tasks[down])
                 .collect(),
         )
     }
@@ -174,45 +191,29 @@ impl TaskGraph {
         self.tasks
             .iter()
             .enumerate()
-            .filter(|(id, task)| {
+            .filter(|(idx, task)| {
                 if completed.contains(task.name()) {
                     return false;
                 }
-                self.upstream[*id]
+                self.upstream[*idx]
                     .iter()
-                    .all(|up| completed.contains(self.tasks[up.as_usize()].name()))
+                    .all(|&up| completed.contains(self.tasks[up].name()))
             })
             .map(|(_, task)| task)
             .collect()
     }
 
-    fn task_id(&self, name: &TaskName) -> Option<TaskId> {
-        self.tasks
-            .iter()
-            .position(|task| task.name() == name)
-            .map(TaskId::from_usize)
-    }
-
-    fn index_task_names(tasks: &[Task]) -> HashMap<&TaskName, TaskId> {
+    fn index_task_names(tasks: &[Task]) -> HashMap<TaskName, usize> {
         tasks
             .iter()
             .enumerate()
-            .map(|(i, task)| (task.name(), TaskId::from_usize(i)))
+            .map(|(i, task)| (task.name().clone(), i))
             .collect()
     }
 
-    fn collect_tasks(
-        pipeline: &Pipeline,
-        interner: &mut Interner,
-    ) -> Result<Vec<Task>, GraphError> {
+    fn collect_tasks(pipeline: &Pipeline) -> Result<Vec<Task>, GraphError> {
         let mut tasks = Vec::with_capacity(pipeline.tasks().len());
         let mut seen_names: HashSet<&TaskName> = HashSet::new();
-
-        let pipeline_id = interner.pipeline(pipeline.name().as_str());
-        debug_assert_eq!(
-            interner.pipeline_name(pipeline_id),
-            Some(pipeline.name().as_str())
-        );
 
         for task in pipeline.tasks() {
             if !seen_names.insert(task.name()) {
@@ -220,9 +221,6 @@ impl TaskGraph {
                     name: task.name().clone(),
                 });
             }
-            let id = interner.task(task.name().as_str());
-            debug_assert_eq!(id.as_usize(), tasks.len());
-            debug_assert_eq!(interner.task_name(id), Some(task.name().as_str()));
             tasks.push(task.clone());
         }
         Ok(tasks)
@@ -230,11 +228,11 @@ impl TaskGraph {
 
     fn validate_after_targets(
         tasks: &[Task],
-        name_to_id: &HashMap<&TaskName, TaskId>,
+        by_name: &HashMap<TaskName, usize>,
     ) -> Result<(), GraphError> {
         for task in tasks {
             for after in task.after() {
-                if !name_to_id.contains_key(after) {
+                if !by_name.contains_key(after) {
                     return Err(GraphError::UnknownAfter {
                         task: task.name().clone(),
                         missing: after.clone(),
@@ -247,36 +245,34 @@ impl TaskGraph {
 
     fn collect_edges(
         tasks: &[Task],
-        name_to_id: &HashMap<&TaskName, TaskId>,
-        interner: &mut Interner,
+        by_name: &HashMap<TaskName, usize>,
     ) -> Result<Vec<GraphEdge>, GraphError> {
-        let mut producers: HashMap<ArtifactId, Vec<TaskId>> = HashMap::new();
-        for task in tasks {
-            let id = name_to_id[task.name()];
+        // Artifact slug → indices of tasks that produce it.
+        let mut producers: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, task) in tasks.iter().enumerate() {
             for artifact in task.outputs() {
-                let art_id = interner.artifact(artifact.slug());
-                debug_assert_eq!(interner.artifact_name(art_id), Some(artifact.slug()));
-                producers.entry(art_id).or_default().push(id);
+                producers
+                    .entry(artifact.slug().to_owned())
+                    .or_default()
+                    .push(idx);
             }
         }
 
         let mut edges = Vec::new();
         let mut index = EdgeIndex::default();
 
-        for task in tasks {
-            let to = name_to_id[task.name()];
+        for (to_idx, task) in tasks.iter().enumerate() {
             for artifact in task.inputs() {
-                let art_id = interner.artifact(artifact.slug());
-                let Some(from_ids) = producers.get(&art_id) else {
+                let Some(from_idxs) = producers.get(artifact.slug()) else {
                     continue;
                 };
-                for &from in from_ids {
-                    index.insert_data(&mut edges, tasks, from, to, art_id, artifact.clone())?;
+                for &from_idx in from_idxs {
+                    index.insert_data(&mut edges, tasks, from_idx, to_idx, artifact.clone())?;
                 }
             }
             for after in task.after() {
-                let from = name_to_id[after];
-                index.insert_control(&mut edges, tasks, from, to)?;
+                let from_idx = by_name[after];
+                index.insert_control(&mut edges, tasks, from_idx, to_idx)?;
             }
         }
         Ok(edges)
@@ -284,21 +280,22 @@ impl TaskGraph {
 
     fn build_adjacency(
         edges: &[GraphEdge],
+        by_name: &HashMap<TaskName, usize>,
         n: usize,
-    ) -> (Vec<Vec<TaskId>>, Vec<Vec<TaskId>>, Vec<usize>) {
+    ) -> (Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<usize>) {
         let mut upstream = vec![Vec::new(); n];
         let mut downstream = vec![Vec::new(); n];
         let mut indegree = vec![0usize; n];
 
         for edge in edges {
-            let from_u = edge.from.as_usize();
-            let to_u = edge.to.as_usize();
-            if !upstream[to_u].contains(&edge.from) {
-                upstream[to_u].push(edge.from);
+            let from_u = by_name[edge.from()];
+            let to_u = by_name[edge.to()];
+            if !upstream[to_u].contains(&from_u) {
+                upstream[to_u].push(from_u);
                 indegree[to_u] += 1;
             }
-            if !downstream[from_u].contains(&edge.to) {
-                downstream[from_u].push(edge.to);
+            if !downstream[from_u].contains(&to_u) {
+                downstream[from_u].push(to_u);
             }
         }
         (upstream, downstream, indegree)
@@ -306,39 +303,32 @@ impl TaskGraph {
 
     fn topological_sort(
         tasks: &[Task],
-        downstream: &[Vec<TaskId>],
+        downstream: &[Vec<usize>],
         mut indegree: Vec<usize>,
-    ) -> Result<Vec<TaskId>, GraphError> {
-        let n = tasks.len();
-        let mut ready: VecDeque<TaskId> = (0..n)
-            .filter(|&i| indegree[i] == 0)
-            .map(TaskId::from_usize)
-            .collect();
+    ) -> Result<Vec<usize>, GraphError> {
+        let n = indegree.len();
+        let mut ready: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
 
         let mut topological_order = Vec::with_capacity(n);
 
-        while let Some(id) = ready.pop_front() {
-            topological_order.push(id);
+        while let Some(idx) = ready.pop_front() {
+            topological_order.push(idx);
             let mut newly_ready = Vec::new();
-            for &down in &downstream[id.as_usize()] {
-                let d = down.as_usize();
-                indegree[d] -= 1;
-                if indegree[d] == 0 {
+            for &down in &downstream[idx] {
+                indegree[down] -= 1;
+                if indegree[down] == 0 {
                     newly_ready.push(down);
                 }
             }
-            newly_ready.sort_by_key(|t| t.as_usize());
+            newly_ready.sort_unstable();
             for t in newly_ready {
                 ready.push_back(t);
             }
         }
 
         if topological_order.len() != n {
-            let ordered: HashSet<TaskId> = topological_order.iter().copied().collect();
-            let leftover: HashSet<TaskId> = (0..n)
-                .map(TaskId::from_usize)
-                .filter(|id| !ordered.contains(id))
-                .collect();
+            let ordered: HashSet<usize> = topological_order.iter().copied().collect();
+            let leftover: HashSet<usize> = (0..n).filter(|id| !ordered.contains(id)).collect();
             return Err(GraphError::Cycle {
                 path: Self::cycle_path(tasks, downstream, &leftover),
             });
@@ -349,11 +339,10 @@ impl TaskGraph {
 
     fn cycle_path(
         tasks: &[Task],
-        downstream: &[Vec<TaskId>],
-        leftover: &HashSet<TaskId>,
+        downstream: &[Vec<usize>],
+        leftover: &HashSet<usize>,
     ) -> Vec<TaskName> {
-        let start = leftover.iter().copied().min_by_key(|id| id.as_usize());
-        let Some(start) = start else {
+        let Some(&start) = leftover.iter().min() else {
             return Vec::new();
         };
 
@@ -375,26 +364,26 @@ impl TaskGraph {
 
         let mut names: Vec<TaskName> = leftover
             .iter()
-            .map(|id| tasks[id.as_usize()].name().clone())
+            .map(|&idx| tasks[idx].name().clone())
             .collect();
         names.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         names
     }
 
     fn find_cycle(
-        id: TaskId,
+        idx: usize,
         tasks: &[Task],
-        downstream: &[Vec<TaskId>],
-        leftover: &HashSet<TaskId>,
-        stack: &mut Vec<TaskId>,
-        on_stack: &mut HashSet<TaskId>,
-        visited: &mut HashSet<TaskId>,
+        downstream: &[Vec<usize>],
+        leftover: &HashSet<usize>,
+        stack: &mut Vec<usize>,
+        on_stack: &mut HashSet<usize>,
+        visited: &mut HashSet<usize>,
     ) -> Option<Vec<TaskName>> {
-        stack.push(id);
-        on_stack.insert(id);
-        visited.insert(id);
+        stack.push(idx);
+        on_stack.insert(idx);
+        visited.insert(idx);
 
-        for &next in &downstream[id.as_usize()] {
+        for &next in &downstream[idx] {
             if !leftover.contains(&next) {
                 continue;
             }
@@ -402,9 +391,9 @@ impl TaskGraph {
                 let start_idx = stack.iter().position(|&x| x == next).unwrap_or(0);
                 let mut path: Vec<TaskName> = stack[start_idx..]
                     .iter()
-                    .map(|t| tasks[t.as_usize()].name().clone())
+                    .map(|&t| tasks[t].name().clone())
                     .collect();
-                path.push(tasks[next.as_usize()].name().clone());
+                path.push(tasks[next].name().clone());
                 return Some(path);
             }
             if !visited.contains(&next)
@@ -415,7 +404,7 @@ impl TaskGraph {
             }
         }
 
-        on_stack.remove(&id);
+        on_stack.remove(&idx);
         stack.pop();
         None
     }
@@ -423,9 +412,9 @@ impl TaskGraph {
 
 #[derive(Default)]
 struct EdgeIndex {
-    control_pairs: HashSet<(TaskId, TaskId)>,
-    data_keys: HashSet<(TaskId, TaskId, ArtifactId)>,
-    data_pairs: HashSet<(TaskId, TaskId)>,
+    control_pairs: HashSet<(usize, usize)>,
+    data_keys: HashSet<(usize, usize, String)>,
+    data_pairs: HashSet<(usize, usize)>,
 }
 
 impl EdgeIndex {
@@ -433,20 +422,20 @@ impl EdgeIndex {
         &mut self,
         edges: &mut Vec<GraphEdge>,
         tasks: &[Task],
-        from: TaskId,
-        to: TaskId,
+        from: usize,
+        to: usize,
     ) -> Result<(), GraphError> {
         if self.control_pairs.contains(&(from, to)) || self.data_pairs.contains(&(from, to)) {
             return Err(GraphError::DuplicateEdge {
-                from: tasks[from.as_usize()].name().clone(),
-                to: tasks[to.as_usize()].name().clone(),
+                from: tasks[from].name().clone(),
+                to: tasks[to].name().clone(),
                 kind: EdgeKind::Control,
             });
         }
         self.control_pairs.insert((from, to));
         edges.push(GraphEdge {
-            from,
-            to,
+            from: tasks[from].name().clone(),
+            to: tasks[to].name().clone(),
             kind: EdgeKind::Control,
         });
         Ok(())
@@ -456,24 +445,23 @@ impl EdgeIndex {
         &mut self,
         edges: &mut Vec<GraphEdge>,
         tasks: &[Task],
-        from: TaskId,
-        to: TaskId,
-        artifact_id: ArtifactId,
+        from: usize,
+        to: usize,
         artifact: Artifact,
     ) -> Result<(), GraphError> {
-        let key = (from, to, artifact_id);
+        let key = (from, to, artifact.slug().to_owned());
         if self.data_keys.contains(&key) || self.control_pairs.contains(&(from, to)) {
             return Err(GraphError::DuplicateEdge {
-                from: tasks[from.as_usize()].name().clone(),
-                to: tasks[to.as_usize()].name().clone(),
+                from: tasks[from].name().clone(),
+                to: tasks[to].name().clone(),
                 kind: EdgeKind::Data { artifact },
             });
         }
         self.data_keys.insert(key);
         self.data_pairs.insert((from, to));
         edges.push(GraphEdge {
-            from,
-            to,
+            from: tasks[from].name().clone(),
+            to: tasks[to].name().clone(),
             kind: EdgeKind::Data { artifact },
         });
         Ok(())

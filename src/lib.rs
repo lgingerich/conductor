@@ -1,14 +1,13 @@
 //! Conductor — experimental next-generation data orchestration.
 //!
 //! Core primitives are [`Task`] (runnable), [`Artifact`] (data identity), and
-//! [`Pipeline`] (composition). Define them with human-readable names; dense
-//! id interning stays internal for planners/runners. See
+//! [`Pipeline`] (composition). Define them with human-readable names; the
+//! compiled [`TaskGraph`] keeps those names as the identity. See
 //! `docs/core-primitives.md` for the design.
 
 mod artifact;
 mod errors;
 mod graph;
-mod intern;
 mod pipeline;
 mod task;
 
