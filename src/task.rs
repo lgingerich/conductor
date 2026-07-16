@@ -5,8 +5,8 @@ use crate::artifact::Artifact;
 
 /// Stable human-readable identity for a [`Task`].
 ///
-/// Used at definition time and in errors. Planning/execution hot paths use
-/// dense task ids internally — not this type.
+/// Used at definition time, in errors, and as the identity stored in the
+/// compiled [`TaskGraph`](crate::TaskGraph).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TaskName(String);
 
@@ -36,11 +36,31 @@ impl From<&str> for TaskName {
     }
 }
 
+impl From<String> for TaskName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
 /// A task-scoped run identifier.
 ///
-/// Construct with [`TaskRunId::from`] — callers always supply the run name.
+/// Construct with [`TaskRunId::new`] or [`TaskRunId::from`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TaskRunId(String);
+
+impl TaskRunId {
+    /// Creates a task run id from the given identifier.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Returns this id as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl fmt::Display for TaskRunId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,7 +70,13 @@ impl fmt::Display for TaskRunId {
 
 impl From<&str> for TaskRunId {
     fn from(id: &str) -> Self {
-        Self(id.to_owned())
+        Self::new(id)
+    }
+}
+
+impl From<String> for TaskRunId {
+    fn from(id: String) -> Self {
+        Self(id)
     }
 }
 

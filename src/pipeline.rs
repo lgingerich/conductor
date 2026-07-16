@@ -35,11 +35,31 @@ impl From<&str> for PipelineName {
     }
 }
 
+impl From<String> for PipelineName {
+    fn from(name: String) -> Self {
+        Self(name)
+    }
+}
+
 /// A pipeline-scoped run identifier.
 ///
-/// Construct with [`PipelineRunId::from`] — callers always supply the run name.
+/// Construct with [`PipelineRunId::new`] or [`PipelineRunId::from`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PipelineRunId(String);
+
+impl PipelineRunId {
+    /// Creates a pipeline run id from the given identifier.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Returns this id as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl fmt::Display for PipelineRunId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -49,7 +69,13 @@ impl fmt::Display for PipelineRunId {
 
 impl From<&str> for PipelineRunId {
     fn from(id: &str) -> Self {
-        Self(id.to_owned())
+        Self::new(id)
+    }
+}
+
+impl From<String> for PipelineRunId {
+    fn from(id: String) -> Self {
+        Self(id)
     }
 }
 
