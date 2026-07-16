@@ -11,6 +11,15 @@ pub struct PipelineName(String);
 
 impl PipelineName {
     /// Creates a pipeline name from a human-readable slug.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::PipelineName;
+    ///
+    /// let name = PipelineName::new("nightly_load");
+    /// assert_eq!(name.as_str(), "nightly_load");
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
@@ -43,6 +52,15 @@ pub struct PipelineRunId(String);
 
 impl PipelineRunId {
     /// Creates a pipeline run id from the given identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::PipelineRunId;
+    ///
+    /// let id = PipelineRunId::new("nightly-2026-07-16");
+    /// assert_eq!(id.as_str(), "nightly-2026-07-16");
+    /// ```
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -80,6 +98,19 @@ pub struct Pipeline {
 
 impl Pipeline {
     /// Creates a pipeline with the given human-readable name and tasks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::{Artifact, Pipeline, Task};
+    ///
+    /// let source = Artifact::new("gcs/users.parquet");
+    /// let load = Task::new("load_users").with_inputs([source]);
+    /// let pipeline = Pipeline::new("nightly_load", [load]);
+    ///
+    /// assert_eq!(pipeline.name().as_str(), "nightly_load");
+    /// assert_eq!(pipeline.tasks().len(), 1);
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<PipelineName>, tasks: impl IntoIterator<Item = Task>) -> Self {
         Self {
@@ -140,6 +171,29 @@ impl PipelineRun {
     /// The run references the plan via [`Arc`], so multiple runs can share one
     /// graph cheaply. Does not execute anything yet — that needs the in-process
     /// runner from the roadmap.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use conductor::{Pipeline, PipelineRun, PipelineRunId, TaskState};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let pipeline = Pipeline::new("load", [
+    ///     conductor::Task::new("load_users"),
+    ///     conductor::Task::new("create_indexes"),
+    /// ]);
+    /// let graph = Arc::new(pipeline.plan()?);
+    /// let run = PipelineRun::new(graph, PipelineRunId::new("load-1"));
+    ///
+    /// assert_eq!(run.pipeline().as_str(), "load");
+    /// assert_eq!(run.run_id().as_str(), "load-1");
+    /// assert_eq!(run.tasks().len(), 2);
+    /// assert!(run.tasks().iter().all(|t| t.state() == &TaskState::Pending));
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub fn new(graph: Arc<TaskGraph>, run_id: PipelineRunId) -> Self {
         let tasks = graph

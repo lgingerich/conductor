@@ -5,9 +5,6 @@ use std::fmt;
 /// Artifacts are identity only — they are not runnable. Tasks declare them as
 /// [`inputs`](crate::Task::inputs) / [`outputs`](crate::Task::outputs); lineage
 /// is derived from those declarations. See `docs/core-primitives.md`.
-///
-/// Dense numeric ids (if used by a planner or runner) are an internal detail;
-/// the public identity of an artifact is its slug.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Artifact {
     slug: String,
@@ -15,6 +12,15 @@ pub struct Artifact {
 
 impl Artifact {
     /// Creates an artifact with the given human-readable slug.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::Artifact;
+    ///
+    /// let artifact = Artifact::new("postgres/app/users");
+    /// assert_eq!(artifact.slug(), "postgres/app/users");
+    /// ```
     #[must_use]
     pub fn new(slug: impl Into<String>) -> Self {
         Self { slug: slug.into() }

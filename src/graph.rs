@@ -161,6 +161,17 @@ impl TaskGraph {
         self.by_name.get(name).map(|&idx| &self.tasks[idx])
     }
 
+    /// Returns the declaration index of `name`, or `None` if not in the graph.
+    ///
+    /// Indices are stable for a given graph and match the position in
+    /// [`tasks`](Self::tasks). Useful for callers that need a dense numeric
+    /// handle for a task (e.g. feeding an external layout library) without
+    /// rebuilding the graph's own name→index map.
+    #[must_use]
+    pub fn task_index(&self, name: &TaskName) -> Option<usize> {
+        self.by_name.get(name).copied()
+    }
+
     /// Returns unique upstream tasks for `task`, or `None` if unknown.
     #[must_use]
     pub fn upstream(&self, task: &TaskName) -> Option<Vec<&Task>> {

@@ -6,7 +6,7 @@ use crate::graph::EdgeKind;
 use crate::task::{TaskName, TaskState};
 
 /// Errors from compiling a [`Pipeline`](crate::Pipeline) into a [`TaskGraph`](crate::TaskGraph).
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, PartialEq, Eq, Error)]
 pub enum GraphError {
     /// Two tasks in the pipeline share the same name.
     #[error("duplicate task name `{name}` in pipeline")]

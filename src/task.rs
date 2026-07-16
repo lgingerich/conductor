@@ -13,6 +13,15 @@ pub struct TaskName(String);
 
 impl TaskName {
     /// Creates a task name from a human-readable slug.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::TaskName;
+    ///
+    /// let name = TaskName::new("load_users");
+    /// assert_eq!(name.as_str(), "load_users");
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self(name.into())
@@ -45,6 +54,15 @@ pub struct TaskRunId(String);
 
 impl TaskRunId {
     /// Creates a task run id from the given identifier.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::TaskRunId;
+    ///
+    /// let id = TaskRunId::new("load-1");
+    /// assert_eq!(id.as_str(), "load-1");
+    /// ```
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
@@ -84,6 +102,18 @@ pub struct Task {
 
 impl Task {
     /// Creates a task with the given human-readable name and no ports or deps.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::Task;
+    ///
+    /// let task = Task::new("load_users");
+    /// assert_eq!(task.name().as_str(), "load_users");
+    /// assert!(task.inputs().is_empty());
+    /// assert!(task.outputs().is_empty());
+    /// assert!(task.after().is_empty());
+    /// ```
     #[must_use]
     pub fn new(name: impl Into<TaskName>) -> Self {
         Self {
@@ -205,6 +235,19 @@ pub struct TaskRun {
 
 impl TaskRun {
     /// Creates a new task run in the [`TaskState::Pending`] state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conductor::{TaskRun, TaskRunId, TaskState};
+    ///
+    /// let run = TaskRun::new("load_users", TaskRunId::new("load-1"));
+    /// assert_eq!(run.task().as_str(), "load_users");
+    /// assert_eq!(run.run_id().as_str(), "load-1");
+    /// assert_eq!(run.state(), &TaskState::Pending);
+    /// assert!(run.started_at().is_none());
+    /// assert!(run.finished_at().is_none());
+    /// ```
     #[must_use]
     pub fn new(task: impl Into<TaskName>, run_id: TaskRunId) -> Self {
         Self {

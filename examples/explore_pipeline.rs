@@ -11,7 +11,6 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ascii_dag::Graph;
@@ -110,11 +109,7 @@ fn main() {
             EdgeKind::Data { artifact } => format!("data({})", artifact.slug()),
             EdgeKind::Control => "control".to_owned(),
         };
-        println!(
-            "  {} -> {}  [{kind}]",
-            graph.edge_from(edge).name(),
-            graph.edge_to(edge).name()
-        );
+        println!("  {} -> {}  [{kind}]", edge.from(), edge.to());
     }
 
     print_ascii_dag(&graph);
@@ -155,16 +150,17 @@ fn print_ascii_dag(graph: &TaskGraph) {
         .map(|(id, task)| (id, task.name().as_str()))
         .collect();
 
-    let name_to_id: HashMap<&str, usize> =
-        nodes.iter().copied().map(|(id, name)| (name, id)).collect();
-
     // Own edge labels so we can borrow them into ascii-dag's Graph<'a>.
     let mut label_storage: Vec<String> = Vec::new();
     let mut edge_specs: Vec<(usize, usize, Option<usize>)> = Vec::new();
 
     for edge in graph.edges() {
-        let from = name_to_id[graph.edge_from(edge).name().as_str()];
-        let to = name_to_id[graph.edge_to(edge).name().as_str()];
+        let from = graph
+            .task_index(edge.from())
+            .expect("edge endpoint must be in graph");
+        let to = graph
+            .task_index(edge.to())
+            .expect("edge endpoint must be in graph");
         let label_idx = match edge.kind() {
             EdgeKind::Data { artifact } => {
                 let idx = label_storage.len();
