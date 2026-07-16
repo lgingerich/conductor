@@ -57,12 +57,12 @@ fn main() {
         .with_outputs([origin]);
 
     // Control-only fan-out after publish (no new catalog artifacts)
-    let purge_cdn = Task::new("purge_cdn").with_after([&upload_origin]);
-    let update_catalog = Task::new("update_catalog").with_after([&upload_origin]);
+    let purge_cdn = Task::new("purge_cdn").with_after(["upload_origin"]);
+    let update_catalog = Task::new("update_catalog").with_after(["upload_origin"]);
 
     // Smoke test waits on both control branches
     let smoke_test_playback =
-        Task::new("smoke_test_playback").with_after([&purge_cdn, &update_catalog]);
+        Task::new("smoke_test_playback").with_after(["purge_cdn", "update_catalog"]);
 
     let pipeline = Pipeline::new(
         "vod_episode_42",

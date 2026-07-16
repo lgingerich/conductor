@@ -266,7 +266,7 @@ mod tests {
         let load = Task::new("gcs_to_postgres")
             .with_inputs([gcs])
             .with_outputs([pg]);
-        let index = Task::new("create_indexes").with_after([&load]);
+        let index = Task::new("create_indexes").with_after(["gcs_to_postgres"]);
         Pipeline::new("load", [load, index])
     }
 

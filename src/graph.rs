@@ -516,8 +516,8 @@ mod tests {
         let gcs_to_postgres = Task::new("gcs_to_postgres")
             .with_inputs([gcs])
             .with_outputs([pg]);
-        let create_indexes = Task::new("create_indexes").with_after([&gcs_to_postgres]);
-        let vacuum = Task::new("vacuum").with_after([&create_indexes]);
+        let create_indexes = Task::new("create_indexes").with_after(["gcs_to_postgres"]);
+        let vacuum = Task::new("vacuum").with_after(["create_indexes"]);
 
         Pipeline::new(
             "load",
@@ -635,8 +635,7 @@ mod tests {
 
     #[test]
     fn unknown_after_errors() {
-        let orphan = Task::new("missing");
-        let b = Task::new("b").with_after([&orphan]);
+        let b = Task::new("b").with_after(["missing"]);
         let pipeline = Pipeline::new("p", [b]);
         assert_eq!(
             assert_err(&pipeline),
@@ -662,7 +661,7 @@ mod tests {
     #[test]
     fn duplicate_control_edge_errors() {
         let a = Task::new("a");
-        let b = Task::new("b").with_after([&a, &a]);
+        let b = Task::new("b").with_after(["a", "a"]);
         let pipeline = Pipeline::new("p", [a, b]);
         assert!(matches!(
             assert_err(&pipeline),
@@ -692,7 +691,7 @@ mod tests {
     fn data_and_control_same_pair_errors() {
         let art = Artifact::new("table");
         let a = Task::new("a").with_outputs([art.clone()]);
-        let b = Task::new("b").with_inputs([art]).with_after([&a]);
+        let b = Task::new("b").with_inputs([art]).with_after(["a"]);
         let pipeline = Pipeline::new("p", [a, b]);
         assert!(matches!(
             assert_err(&pipeline),

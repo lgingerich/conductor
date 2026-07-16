@@ -138,10 +138,18 @@ impl Task {
         self
     }
 
-    /// Sets control dependencies from other tasks (by name).
+    /// Sets control dependencies on other tasks by name.
+    ///
+    /// Accepts anything that converts into [`TaskName`] — string literals
+    /// (`with_after(["load"])`) or owned [`TaskName`] values. Dependencies
+    /// are by name, so they may reference tasks declared later.
     #[must_use]
-    pub fn with_after<'a>(mut self, tasks: impl IntoIterator<Item = &'a Task>) -> Self {
-        self.after = tasks.into_iter().map(|task| task.name.clone()).collect();
+    pub fn with_after<T>(mut self, tasks: T) -> Self
+    where
+        T: IntoIterator,
+        T::Item: Into<TaskName>,
+    {
+        self.after = tasks.into_iter().map(Into::into).collect();
         self
     }
 
@@ -402,7 +410,7 @@ mod tests {
         let load = Task::new("gcs_to_postgres")
             .with_inputs([gcs])
             .with_outputs([pg]);
-        let index = Task::new("create_indexes").with_after([&load]);
+        let index = Task::new("create_indexes").with_after(["gcs_to_postgres"]);
 
         assert_eq!(index.name(), &TaskName::from("create_indexes"));
         assert!(index.outputs().is_empty());
