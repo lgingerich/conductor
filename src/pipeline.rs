@@ -242,6 +242,9 @@ impl PipelineRun {
     /// machine). Returns `None` if no task in the run has that name.
     #[must_use]
     pub fn task_mut(&mut self, name: &TaskName) -> Option<&mut TaskRun> {
+        // TODO(perf): O(n) linear scan. Once a runner drives transitions per
+        // task, add a name→index map to PipelineRun mirroring the graph's
+        // `by_name` so lookups are O(1) instead of scanning `tasks` each call.
         self.tasks
             .iter_mut()
             .find(|task_run| task_run.task() == name)

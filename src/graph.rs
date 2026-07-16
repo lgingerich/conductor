@@ -40,6 +40,10 @@ impl fmt::Display for EdgeKind {
 /// [`TaskGraph::edge_to`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEdge {
+    // TODO(perf): each endpoint is an owned `TaskName` string, so every edge
+    // allocates and carries strings for `from`/`to`. At scale — many graphs
+    // held by a persistent scheduler, edge iteration in hot paths — this is
+    // memory- and string-hash heavy.
     from: TaskName,
     to: TaskName,
     kind: EdgeKind,
@@ -84,6 +88,9 @@ pub struct TaskGraph {
 impl TaskGraph {
     /// Compiles a pipeline into a validated task dependency graph.
     pub(crate) fn from_pipeline(pipeline: &Pipeline) -> Result<Self, GraphError> {
+        // TODO(perf): the graph is a pure function of the pipeline, so
+        // persisting the compiled graph duplicates data re-derivable from the
+        // pipeline declaration.
         let tasks = Self::collect_tasks(pipeline)?;
         let by_name = Self::index_task_names(&tasks);
 
@@ -199,6 +206,12 @@ impl TaskGraph {
     /// Returns tasks not in `completed` whose every upstream task is completed.
     #[must_use]
     pub fn ready(&self, completed: &HashSet<TaskName>) -> Vec<&Task> {
+        // TODO(perf): O(tasks + edges) full rescan plus a Vec allocation per
+        // call. Fine as an inspection query, but a push scheduler wants the
+        // ready set maintained incrementally as tasks complete (O(newly-ready)
+        // per completion), not recomputed from scratch each time. The
+        // `completed` set is a string-keyed `HashSet<TaskName>`, so each
+        // membership check hashes a string — costly once this is a hot path.
         self.tasks
             .iter()
             .enumerate()
@@ -265,6 +278,9 @@ impl TaskGraph {
         n: usize,
     ) -> Result<(Vec<GraphEdge>, Vec<Vec<usize>>, Vec<Vec<usize>>, Vec<usize>), GraphError> {
         // Artifact slug → indices of tasks that produce it.
+        // TODO(perf): if the future cross-pipeline artifact catalog is
+        // persisted as the source of truth, every materialization becomes a
+        // hot durable write into that index.
         let mut producers: HashMap<String, Vec<usize>> = HashMap::new();
         for (idx, task) in tasks.iter().enumerate() {
             for artifact in task.outputs() {
