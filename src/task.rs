@@ -36,12 +36,6 @@ impl From<&str> for TaskName {
     }
 }
 
-impl From<String> for TaskName {
-    fn from(name: String) -> Self {
-        Self(name)
-    }
-}
-
 /// A task-scoped run identifier.
 ///
 /// Construct with [`TaskRunId::new`] or [`TaskRunId::from`].
@@ -71,12 +65,6 @@ impl fmt::Display for TaskRunId {
 impl From<&str> for TaskRunId {
     fn from(id: &str) -> Self {
         Self::new(id)
-    }
-}
-
-impl From<String> for TaskRunId {
-    fn from(id: String) -> Self {
-        Self(id)
     }
 }
 

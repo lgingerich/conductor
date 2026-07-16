@@ -35,12 +35,6 @@ impl From<&str> for PipelineName {
     }
 }
 
-impl From<String> for PipelineName {
-    fn from(name: String) -> Self {
-        Self(name)
-    }
-}
-
 /// A pipeline-scoped run identifier.
 ///
 /// Construct with [`PipelineRunId::new`] or [`PipelineRunId::from`].
@@ -70,12 +64,6 @@ impl fmt::Display for PipelineRunId {
 impl From<&str> for PipelineRunId {
     fn from(id: &str) -> Self {
         Self::new(id)
-    }
-}
-
-impl From<String> for PipelineRunId {
-    fn from(id: String) -> Self {
-        Self(id)
     }
 }
 
