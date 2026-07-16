@@ -127,7 +127,7 @@ impl PipelineRun {
     /// graph cheaply. Does not execute anything yet — that needs the in-process
     /// runner from the roadmap.
     #[must_use]
-    pub fn new(graph: Arc<TaskGraph>, run_id: impl AsRef<str>) -> Self {
+    pub fn new(graph: Arc<TaskGraph>, run_id: PipelineRunId) -> Self {
         let tasks = graph
             .tasks()
             .iter()
@@ -136,7 +136,7 @@ impl PipelineRun {
 
         Self {
             graph,
-            run_id: PipelineRunId::from(run_id.as_ref()),
+            run_id,
             tasks,
         }
     }
@@ -170,7 +170,7 @@ impl PipelineRun {
 mod tests {
     use std::sync::Arc;
 
-    use super::{Pipeline, PipelineName, PipelineRun};
+    use super::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
     use crate::artifact::Artifact;
     use crate::graph::TaskGraph;
     use crate::task::{Task, TaskState};
@@ -196,7 +196,7 @@ mod tests {
     fn run_seeds_one_pending_run_per_task() {
         let pipeline = load_pipeline();
         let graph = Arc::new(plan(&pipeline));
-        let run = PipelineRun::new(graph, "load-test");
+        let run = PipelineRun::new(graph, PipelineRunId::from("load-test"));
 
         assert_eq!(run.pipeline(), &PipelineName::from("load"));
         assert_eq!(run.run_id().to_string(), "load-test");
@@ -216,7 +216,7 @@ mod tests {
     fn run_references_validated_graph() {
         let pipeline = load_pipeline();
         let graph = Arc::new(plan(&pipeline));
-        let run = PipelineRun::new(graph, "load-test");
+        let run = PipelineRun::new(graph, PipelineRunId::from("load-test"));
 
         assert_eq!(run.graph().pipeline(), &PipelineName::from("load"));
         assert_eq!(run.graph().tasks().len(), 2);
@@ -233,8 +233,8 @@ mod tests {
     fn multiple_runs_share_one_graph() {
         let pipeline = load_pipeline();
         let graph = Arc::new(plan(&pipeline));
-        let run1 = PipelineRun::new(Arc::clone(&graph), "run-1");
-        let run2 = PipelineRun::new(graph, "run-2");
+        let run1 = PipelineRun::new(Arc::clone(&graph), PipelineRunId::from("run-1"));
+        let run2 = PipelineRun::new(graph, PipelineRunId::from("run-2"));
 
         // Both runs reference the same plan (same pipeline, same task set).
         assert_eq!(run1.graph().pipeline(), run2.graph().pipeline());
@@ -246,7 +246,7 @@ mod tests {
     fn empty_pipeline_run_has_no_tasks() {
         let pipeline = Pipeline::new("empty", []);
         let graph = Arc::new(plan(&pipeline));
-        let run = PipelineRun::new(graph, "empty-run");
+        let run = PipelineRun::new(graph, PipelineRunId::from("empty-run"));
         assert!(run.tasks().is_empty());
         assert_eq!(run.run_id().to_string(), "empty-run");
     }

@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ascii_dag::Graph;
-use conductor::{Artifact, EdgeKind, Pipeline, PipelineRun, Task, TaskGraph, TaskState};
+use conductor::{
+    Artifact, EdgeKind, Pipeline, PipelineRun, PipelineRunId, Task, TaskGraph, TaskState,
+};
 
 fn main() {
     println!("=== Conductor explore_pipeline (VOD packaging) ===\n");
@@ -117,7 +119,7 @@ fn main() {
 
     print_ascii_dag(&graph);
 
-    let run = PipelineRun::new(Arc::new(graph), "vod-manual-001");
+    let run = PipelineRun::new(Arc::new(graph), PipelineRunId::from("vod-manual-001"));
     println!("\nPipeline run: {}", run.run_id());
     println!("Seeded task runs (all still Pending):\n");
     for task_run in run.tasks() {
