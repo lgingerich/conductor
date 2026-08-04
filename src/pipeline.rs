@@ -240,14 +240,14 @@ impl PipelineRun {
 
     /// Looks up a task run by task name for mutation (e.g. to drive its state
     /// machine). Returns `None` if no task in the run has that name.
+    ///
+    /// Task runs are seeded in graph declaration order (see
+    /// [`PipelineRun::new`](Self::new)), so the graph's name→index map
+    /// resolves directly into `tasks` in O(1).
     #[must_use]
     pub fn task_mut(&mut self, name: &TaskName) -> Option<&mut TaskRun> {
-        // TODO(perf): O(n) linear scan. Once a runner drives transitions per
-        // task, add a name→index map to PipelineRun mirroring the graph's
-        // `by_name` so lookups are O(1) instead of scanning `tasks` each call.
-        self.tasks
-            .iter_mut()
-            .find(|task_run| task_run.task() == name)
+        let idx = self.graph.task_index(name)?;
+        self.tasks.get_mut(idx)
     }
 }
 
@@ -258,7 +258,7 @@ mod tests {
     use super::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
     use crate::artifact::Artifact;
     use crate::graph::TaskGraph;
-    use crate::task::{Task, TaskState};
+    use crate::task::{Task, TaskName, TaskState};
 
     fn load_pipeline() -> Pipeline {
         let gcs = Artifact::new("gcs/users.parquet");
@@ -340,5 +340,23 @@ mod tests {
         let run = PipelineRun::new(graph, PipelineRunId::from("empty-run"));
         assert!(run.tasks().is_empty());
         assert_eq!(run.run_id().to_string(), "empty-run");
+    }
+
+    #[test]
+    fn task_mut_resolves_by_name_in_constant_time() {
+        let pipeline = load_pipeline();
+        let graph = Arc::new(plan(&pipeline));
+        let mut run = PipelineRun::new(graph, PipelineRunId::from("load-test"));
+
+        assert_eq!(
+            run.graph().task_index(&TaskName::from("gcs_to_postgres")),
+            Some(0)
+        );
+        assert_eq!(
+            run.task_mut(&TaskName::from("gcs_to_postgres"))
+                .map(|task_run| task_run.task().as_str()),
+            Some("gcs_to_postgres")
+        );
+        assert!(run.task_mut(&TaskName::from("missing")).is_none());
     }
 }

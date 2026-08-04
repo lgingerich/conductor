@@ -22,3 +22,8 @@ cargo run --example explore_pipeline
   near-instant startup, strong isolation, and polyglot execution.
 - **Single binary** — embedded persistence keeps the operational footprint
   minimal during exploration.
+
+
+## Notes
+- Airflow backend is generally Postgres or other "live" DB. Can we instead use object storage (e.g. SlateDB)?
+

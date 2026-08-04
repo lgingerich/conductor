@@ -215,6 +215,42 @@ Users work with slugs and values (`Artifact`, `Task`, `Pipeline`). Dense ids and
 the `Interner` are process-local implementation details for scheduling hot
 paths — not part of the definition API.
 
+## Identity and the full-name namespace
+
+Every entity has exactly one canonical full name:
+
+| Entity | Full name | Examples |
+|--------|-----------|----------|
+| Pipeline | `{pipeline}` | `load`, `generate` |
+| Task | `{pipeline}/{task}` | `load/create_indexes` |
+| Artifact | `{artifact_slug}` | `postgres/app/users` |
+
+All three share **one namespace**: distinct entities must have distinct full
+names. A collision is a *universal duplicate* — two things addressable by the
+same name that cannot be told apart by name alone.
+
+Consequences:
+
+- **Task names may repeat across pipelines** (`a/extract` and `b/extract` are
+  distinct identities), but not within one pipeline — the planner's
+  `DuplicateTask` check.
+- **An Artifact slug must not equal a Pipeline name or a Task full name.**
+  For example, an Artifact named `load/extract` is ambiguous with the Task
+  `extract` in pipeline `load`, and an Artifact named `load` is ambiguous
+  with the Pipeline `load`.
+- **`/` is the namespace separator** wherever it appears in composed names:
+  Artifact slugs are paths, and task run ids are composed as
+  `{run_id}/{task_name}`. Task and Pipeline names are therefore single
+  segments and must not contain `/`.
+
+Full-name uniqueness is a **workspace-level invariant**, not a per-pipeline
+one: `Pipeline::plan()` compiles one pipeline in isolation and cannot observe
+cross-pipeline tasks or the global Artifact catalog. The future
+workspace/registry compile indexes every registered Pipeline, Artifact, and
+Task by canonical full name and rejects duplicates there. Per-pipeline
+validation covers only what is visible locally: task names unique within a
+pipeline, `after` targets resolving, and no cycles.
+
 ## Non-goals (for the primitive itself)
 
 - Scheduler, WASM runtime, and persistence layout details

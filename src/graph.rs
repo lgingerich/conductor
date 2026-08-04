@@ -129,17 +129,23 @@ impl TaskGraph {
     }
 
     /// Resolves an edge's upstream task.
+    ///
+    /// Returns `None` when the edge references a task not in this graph (e.g.
+    /// an edge from a different graph).
     #[must_use]
-    pub fn edge_from(&self, edge: &GraphEdge) -> &Task {
-        let idx = self.by_name[edge.from()];
-        &self.tasks[idx]
+    pub fn edge_from(&self, edge: &GraphEdge) -> Option<&Task> {
+        let idx = self.by_name.get(edge.from())?;
+        self.tasks.get(*idx)
     }
 
     /// Resolves an edge's downstream task.
+    ///
+    /// Returns `None` when the edge references a task not in this graph (e.g.
+    /// an edge from a different graph).
     #[must_use]
-    pub fn edge_to(&self, edge: &GraphEdge) -> &Task {
-        let idx = self.by_name[edge.to()];
-        &self.tasks[idx]
+    pub fn edge_to(&self, edge: &GraphEdge) -> Option<&Task> {
+        let idx = self.by_name.get(edge.to())?;
+        self.tasks.get(*idx)
     }
 
     /// Returns tasks in topological order (declaration order among ties).
@@ -409,7 +415,11 @@ impl TaskGraph {
                 continue;
             }
             if on_stack.contains(&next) {
-                let start_idx = stack.iter().position(|&x| x == next).unwrap_or(0);
+                // `stack` and `on_stack` are pushed and popped together below,
+                // so a node on `on_stack` is always present in `stack`.
+                let Some(start_idx) = stack.iter().position(|&x| x == next) else {
+                    unreachable!("stack and on_stack are kept in lockstep");
+                };
                 let mut path: Vec<TaskName> = stack[start_idx..]
                     .iter()
                     .map(|&t| tasks[t].name().clone())
@@ -571,29 +581,50 @@ mod tests {
         let edges = graph.edges();
         assert_eq!(edges.len(), 4);
 
-        assert_eq!(graph.edge_from(&edges[0]).name().as_str(), "run_sql");
-        assert_eq!(graph.edge_to(&edges[0]).name().as_str(), "bq_to_gcs");
+        assert_eq!(
+            graph.edge_from(&edges[0]).map(|task| task.name().as_str()),
+            Some("run_sql")
+        );
+        assert_eq!(
+            graph.edge_to(&edges[0]).map(|task| task.name().as_str()),
+            Some("bq_to_gcs")
+        );
         assert!(matches!(
             edges[0].kind(),
             EdgeKind::Data { artifact } if artifact.slug() == "bigquery/analytics/users"
         ));
 
-        assert_eq!(graph.edge_from(&edges[1]).name().as_str(), "bq_to_gcs");
-        assert_eq!(graph.edge_to(&edges[1]).name().as_str(), "gcs_to_postgres");
+        assert_eq!(
+            graph.edge_from(&edges[1]).map(|task| task.name().as_str()),
+            Some("bq_to_gcs")
+        );
+        assert_eq!(
+            graph.edge_to(&edges[1]).map(|task| task.name().as_str()),
+            Some("gcs_to_postgres")
+        );
         assert!(matches!(
             edges[1].kind(),
             EdgeKind::Data { artifact } if artifact.slug() == "gcs/analytics/users.parquet"
         ));
 
         assert_eq!(
-            graph.edge_from(&edges[2]).name().as_str(),
-            "gcs_to_postgres"
+            graph.edge_from(&edges[2]).map(|task| task.name().as_str()),
+            Some("gcs_to_postgres")
         );
-        assert_eq!(graph.edge_to(&edges[2]).name().as_str(), "create_indexes");
+        assert_eq!(
+            graph.edge_to(&edges[2]).map(|task| task.name().as_str()),
+            Some("create_indexes")
+        );
         assert_eq!(edges[2].kind(), &EdgeKind::Control);
 
-        assert_eq!(graph.edge_from(&edges[3]).name().as_str(), "create_indexes");
-        assert_eq!(graph.edge_to(&edges[3]).name().as_str(), "vacuum");
+        assert_eq!(
+            graph.edge_from(&edges[3]).map(|task| task.name().as_str()),
+            Some("create_indexes")
+        );
+        assert_eq!(
+            graph.edge_to(&edges[3]).map(|task| task.name().as_str()),
+            Some("vacuum")
+        );
         assert_eq!(edges[3].kind(), &EdgeKind::Control);
 
         let gcs_to_postgres = TaskName::from("gcs_to_postgres");
