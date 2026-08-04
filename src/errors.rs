@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::graph::EdgeKind;
+use crate::graph::{EdgeKind, TrackerState};
 use crate::task::{TaskName, TaskState};
 
 /// Errors from compiling a [`Pipeline`](crate::Pipeline) into a [`TaskGraph`](crate::TaskGraph).
@@ -61,5 +61,24 @@ pub enum TransitionError {
         from: TaskState,
         /// The transition that was attempted (`"start"`, `"complete"`, etc.).
         attempted: &'static str,
+    },
+}
+
+/// Errors from driving a [`ReadyTracker`](crate::ReadyTracker).
+#[derive(Debug, PartialEq, Eq, Error)]
+pub enum ReadyError {
+    /// The task index is not a valid index into the graph's tasks.
+    #[error("no task at index {index} in the graph")]
+    UnknownTask {
+        /// The offending index.
+        index: usize,
+    },
+    /// The task was not in a state that permits the attempted completion.
+    #[error("cannot complete task at index {index}: task is {state}")]
+    InvalidTransition {
+        /// The task index.
+        index: usize,
+        /// The current tracker state of the task.
+        state: TrackerState,
     },
 }

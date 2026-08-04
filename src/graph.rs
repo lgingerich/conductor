@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use crate::artifact::Artifact;
-use crate::errors::GraphError;
+use crate::errors::{GraphError, ReadyError};
 use crate::pipeline::{Pipeline, PipelineName};
 use crate::task::{Task, TaskName};
 
@@ -441,6 +441,213 @@ impl TaskGraph {
     }
 }
 
+/// Incremental, event-driven tracker of which tasks in a [`TaskGraph`] are
+/// runnable.
+///
+/// This is the push-scheduler kernel: instead of recomputing the ready set
+/// from scratch on every event (see [`TaskGraph::ready`]), it maintains a
+/// per-task count of unfinished upstream tasks and, when a task completes or
+/// fails, only examines that task's immediate downstream neighbors. Work per
+/// event is `O(newly-ready + skipped)` rather than `O(tasks + edges)`.
+///
+/// The tracker borrows the graph's immutable adjacency and owns only the
+/// mutable per-run state, so it can be created cheaply per run and the graph
+/// stays shared via [`Arc`](std::sync::Arc). It emits task *indices*, which
+/// callers resolve through the graph.
+///
+/// A task is released (moves to `Ready`) exactly once, when its last
+/// unfinished upstream task reaches a terminal state. A failed task cascades:
+/// its downstream tasks become `Skipped` rather than runnable (per
+/// [`TaskState::Skipped`](crate::TaskState::Skipped) semantics), and each
+/// skipped task in turn releases its own downstream, since skipping is also
+/// terminal.
+#[derive(Debug)]
+pub struct ReadyTracker<'a> {
+    graph: &'a TaskGraph,
+    /// Unfinished upstream-task count per task index.
+    remaining: Vec<usize>,
+    /// Per-task run state.
+    status: Vec<TrackerState>,
+}
+
+/// The per-task run state maintained by a [`ReadyTracker`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackerState {
+    /// Upstream dependencies are not all terminal yet.
+    Waiting,
+    /// All upstream dependencies are terminal; the task may run.
+    Ready,
+    /// The task is currently running (after being released).
+    Running,
+    /// The task reached a terminal state (completed, failed, or skipped).
+    Done,
+    /// The task was not run because an upstream task failed (cascade-skip).
+    Skipped,
+}
+
+impl fmt::Display for TrackerState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Self::Waiting => "waiting",
+            Self::Ready => "ready",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Skipped => "skipped",
+        };
+        f.write_str(label)
+    }
+}
+
+impl<'a> ReadyTracker<'a> {
+    /// Creates a tracker over `graph`, marking every root task as [`Ready`](TrackerState::Ready).
+    #[must_use]
+    pub fn new(graph: &'a TaskGraph) -> Self {
+        let n = graph.tasks.len();
+        let remaining: Vec<usize> = graph.upstream.iter().map(Vec::len).collect();
+        let status = (0..n)
+            .map(|idx| {
+                if remaining[idx] == 0 {
+                    TrackerState::Ready
+                } else {
+                    TrackerState::Waiting
+                }
+            })
+            .collect();
+        Self {
+            graph,
+            remaining,
+            status,
+        }
+    }
+
+    /// Returns the indices of tasks that are currently runnable.
+    ///
+    /// This is an `O(n)` inspection query (not the hot path); the point of the
+    /// tracker is that [`complete`](Self::complete) / [`fail`](Self::fail)
+    /// maintain the ready set incrementally rather than recomputing it.
+    #[must_use]
+    pub fn ready(&self) -> Vec<usize> {
+        self.status
+            .iter()
+            .enumerate()
+            .filter(|(_, state)| matches!(state, TrackerState::Ready))
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Returns the current tracker state of the task at `index`.
+    #[must_use]
+    pub fn state(&self, index: usize) -> Option<TrackerState> {
+        self.status.get(index).copied()
+    }
+
+    /// Marks the task at `index` as currently running, so the runner can claim
+    /// it from the ready set and avoid re-dispatching it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadyError::UnknownTask`] if `index` is out of range, or
+    /// [`ReadyError::InvalidTransition`] if the task is not `Ready`.
+    pub fn run(&mut self, index: usize) -> Result<(), ReadyError> {
+        let n = self.graph.tasks.len();
+        if index >= n {
+            return Err(ReadyError::UnknownTask { index });
+        }
+        if self.status[index] != TrackerState::Ready {
+            return Err(ReadyError::InvalidTransition {
+                index,
+                state: self.status[index],
+            });
+        }
+        self.status[index] = TrackerState::Running;
+        Ok(())
+    }
+
+    /// Marks the task at `index` as completed and returns the indices of tasks
+    /// that just became runnable as a result.
+    ///
+    /// The task must currently be `Ready` or `Running`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadyError::UnknownTask`] if `index` is out of range, or
+    /// [`ReadyError::InvalidTransition`] if the task is not runnable/current
+    /// (e.g. it was already completed, or is still `Waiting`).
+    pub fn complete(&mut self, index: usize) -> Result<Vec<usize>, ReadyError> {
+        self.finish(index, false)
+    }
+
+    /// Marks the task at `index` as failed and cascade-skips its downstream
+    /// subtree. Returns the indices of tasks that became runnable as a result
+    /// (i.e. tasks whose *other* upstream branches all completed, reached via
+    /// skipped tasks).
+    ///
+    /// The task itself is marked [`Done`](TrackerState::Done) — the caller
+    /// knows it failed because it invoked this method. Its downstream tasks
+    /// are marked [`Skipped`](TrackerState::Skipped), which is also terminal,
+    /// so *their* downstream is released recursively.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadyError::UnknownTask`] if `index` is out of range, or
+    /// [`ReadyError::InvalidTransition`] if the task is not runnable/current.
+    pub fn fail(&mut self, index: usize) -> Result<Vec<usize>, ReadyError> {
+        self.finish(index, true)
+    }
+
+    /// Applies a terminal state to the task at `index` and releases its
+    /// downstream neighbors.
+    ///
+    /// When `skip` is false (a successful completion), downstream tasks whose
+    /// remaining count reaches zero become `Ready` and are emitted. When
+    /// `skip` is true (a failure), downstream tasks are cascade-skipped
+    /// instead and their own downstream is released recursively.
+    fn finish(&mut self, index: usize, skip: bool) -> Result<Vec<usize>, ReadyError> {
+        let n = self.graph.tasks.len();
+        if index >= n {
+            return Err(ReadyError::UnknownTask { index });
+        }
+        match self.status[index] {
+            TrackerState::Ready | TrackerState::Running => {}
+            other => {
+                return Err(ReadyError::InvalidTransition {
+                    index,
+                    state: other,
+                });
+            }
+        }
+        self.status[index] = TrackerState::Done;
+        let mut newly_ready = Vec::new();
+        self.release_downstream(index, skip, &mut newly_ready);
+        Ok(newly_ready)
+    }
+
+    /// Decrements the remaining counts of `idx`'s downstream tasks, releasing
+    /// those that hit zero.
+    ///
+    /// When `skip` is true (a failure), the downstream tasks are cascade-skipped
+    /// and *their* downstream is released recursively — a skipped task is also
+    /// terminal. When `skip` is false, downstream tasks that reach zero
+    /// remaining become `Ready` and are emitted.
+    fn release_downstream(&mut self, idx: usize, skip: bool, out: &mut Vec<usize>) {
+        // Collect first to avoid double-borrowing `self` (immutable `graph`
+        // borrow vs. mutable `status`/`remaining`).
+        let downstream = self.graph.downstream[idx].clone();
+        for d in downstream {
+            if skip {
+                self.status[d] = TrackerState::Skipped;
+                self.release_downstream(d, true, out);
+                continue;
+            }
+            self.remaining[d] -= 1;
+            if self.remaining[d] == 0 && self.status[d] == TrackerState::Waiting {
+                self.status[d] = TrackerState::Ready;
+                out.push(d);
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct EdgeIndex {
     control_pairs: HashSet<(usize, usize)>,
@@ -507,9 +714,11 @@ impl EdgeIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::{EdgeKind, TaskGraph};
+    #![allow(clippy::unwrap_used)]
+
+    use super::{EdgeKind, ReadyTracker, TaskGraph, TrackerState};
     use crate::artifact::Artifact;
-    use crate::errors::GraphError;
+    use crate::errors::{GraphError, ReadyError};
     use crate::pipeline::{Pipeline, PipelineName};
     use crate::task::{Task, TaskName};
     use std::collections::HashSet;
@@ -767,5 +976,227 @@ mod tests {
         assert!(graph.edges().is_empty());
         assert_eq!(names(&graph.roots()), vec!["consume"]);
         assert_eq!(names(&graph.ready(&HashSet::new())), vec!["consume"]);
+    }
+
+    fn fan_in_pipeline() -> Pipeline {
+        let x_art = Artifact::new("x");
+        let y_art = Artifact::new("y");
+        let producer_a = Task::new("a").with_outputs([x_art.clone()]);
+        let producer_b = Task::new("b").with_outputs([y_art.clone()]);
+        let combiner = Task::new("c").with_inputs([x_art, y_art]);
+        Pipeline::new("fan", [producer_a, producer_b, combiner])
+    }
+
+    fn tracker_ready_names<'g>(tracker: &ReadyTracker<'g>, graph: &'g TaskGraph) -> Vec<&'g str> {
+        let mut names: Vec<&str> = tracker
+            .ready()
+            .iter()
+            .map(|&idx| graph.tasks()[idx].name().as_str())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+
+    fn assert_index(graph: &TaskGraph, tracker: &ReadyTracker<'_>, name: &str) -> TrackerState {
+        let idx = graph.task_index(&TaskName::from(name)).unwrap();
+        tracker.state(idx).unwrap()
+    }
+
+    #[test]
+    fn tracker_seeds_roots_ready() {
+        let pipeline = explore_shaped_pipeline();
+        let graph = assert_ok(&pipeline);
+        let tracker = ReadyTracker::new(&graph);
+
+        assert_eq!(tracker_ready_names(&tracker, &graph), vec!["run_sql"]);
+        assert_eq!(
+            assert_index(&graph, &tracker, "run_sql"),
+            TrackerState::Ready
+        );
+        assert_eq!(
+            assert_index(&graph, &tracker, "bq_to_gcs"),
+            TrackerState::Waiting
+        );
+        assert_eq!(
+            assert_index(&graph, &tracker, "vacuum"),
+            TrackerState::Waiting
+        );
+    }
+
+    #[test]
+    fn tracker_releases_on_fan_in_completion() {
+        let pipeline = fan_in_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        let a = graph.task_index(&TaskName::from("a")).unwrap();
+        let b = graph.task_index(&TaskName::from("b")).unwrap();
+        let c = graph.task_index(&TaskName::from("c")).unwrap();
+
+        // Both roots ready; c waits on both.
+        assert_eq!(tracker_ready_names(&tracker, &graph), vec!["a", "b"]);
+        assert_eq!(tracker.state(c), Some(TrackerState::Waiting));
+
+        // Completing one upstream still leaves c waiting.
+        assert_eq!(tracker.complete(a).unwrap(), Vec::<usize>::new());
+        assert_eq!(tracker.state(c), Some(TrackerState::Waiting));
+
+        // Completing the last upstream releases c.
+        assert_eq!(tracker.complete(b).unwrap(), vec![c]);
+        assert_eq!(tracker.state(c), Some(TrackerState::Ready));
+        assert_eq!(tracker_ready_names(&tracker, &graph), vec!["c"]);
+    }
+
+    #[test]
+    fn tracker_cascade_skips_downstream_on_fail() {
+        let pipeline = fan_in_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        let a = graph.task_index(&TaskName::from("a")).unwrap();
+        let b = graph.task_index(&TaskName::from("b")).unwrap();
+        let c = graph.task_index(&TaskName::from("c")).unwrap();
+
+        // Failing a skips c (c is un-runnable) and releases nothing.
+        assert_eq!(tracker.fail(a).unwrap(), Vec::<usize>::new());
+        assert_eq!(tracker.state(a), Some(TrackerState::Done));
+        assert_eq!(tracker.state(c), Some(TrackerState::Skipped));
+
+        // b is still runnable; completing it releases nothing (c is skipped).
+        assert_eq!(tracker_ready_names(&tracker, &graph), vec!["b"]);
+        assert_eq!(tracker.complete(b).unwrap(), Vec::<usize>::new());
+        assert_eq!(tracker.state(c), Some(TrackerState::Skipped));
+        assert!(tracker.ready().is_empty());
+    }
+
+    #[test]
+    fn tracker_skipped_task_releases_its_downstream() {
+        let pipeline = explore_shaped_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        // run_sql is the only root. Failing it skips the entire downstream chain.
+        let run_sql = graph.task_index(&TaskName::from("run_sql")).unwrap();
+        assert_eq!(tracker.fail(run_sql).unwrap(), Vec::<usize>::new());
+        assert_eq!(tracker.state(run_sql), Some(TrackerState::Done));
+        for task in graph.tasks().iter().skip(1) {
+            let idx = graph.task_index(task.name()).unwrap();
+            assert_eq!(tracker.state(idx), Some(TrackerState::Skipped));
+        }
+        assert!(tracker.ready().is_empty());
+    }
+
+    #[test]
+    fn tracker_errors_on_unknown_index() {
+        let pipeline = explore_shaped_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        assert_eq!(
+            tracker.complete(999),
+            Err(ReadyError::UnknownTask { index: 999 })
+        );
+        assert_eq!(
+            tracker.fail(999),
+            Err(ReadyError::UnknownTask { index: 999 })
+        );
+    }
+
+    #[test]
+    fn tracker_errors_on_invalid_transition() {
+        let pipeline = explore_shaped_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        let run_sql = graph.task_index(&TaskName::from("run_sql")).unwrap();
+        let vacuum = graph.task_index(&TaskName::from("vacuum")).unwrap();
+
+        // Completing a Waiting (not yet released) task is an error.
+        assert_eq!(
+            tracker.complete(vacuum),
+            Err(ReadyError::InvalidTransition {
+                index: vacuum,
+                state: TrackerState::Waiting,
+            })
+        );
+
+        // Double-completing the same task is an error. Completing run_sql first
+        // releases bq_to_gcs (its only downstream).
+        let bq_to_gcs = graph.task_index(&TaskName::from("bq_to_gcs")).unwrap();
+        assert_eq!(tracker.complete(run_sql).unwrap(), vec![bq_to_gcs]);
+        assert_eq!(
+            tracker.complete(run_sql),
+            Err(ReadyError::InvalidTransition {
+                index: run_sql,
+                state: TrackerState::Done,
+            })
+        );
+
+        // Failing a Waiting task is an error.
+        assert_eq!(
+            tracker.fail(vacuum),
+            Err(ReadyError::InvalidTransition {
+                index: vacuum,
+                state: TrackerState::Waiting,
+            })
+        );
+    }
+
+    #[test]
+    fn tracker_run_claims_ready_task() {
+        let pipeline = fan_in_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+
+        let a = graph.task_index(&TaskName::from("a")).unwrap();
+        let c = graph.task_index(&TaskName::from("c")).unwrap();
+
+        // run() claims a Ready task; the ready set no longer contains it.
+        assert_eq!(tracker.run(a), Ok(()));
+        assert_eq!(tracker.state(a), Some(TrackerState::Running));
+        assert_eq!(tracker_ready_names(&tracker, &graph), vec!["b"]);
+
+        // run() on a Waiting task is an error.
+        assert_eq!(
+            tracker.run(c),
+            Err(ReadyError::InvalidTransition {
+                index: c,
+                state: TrackerState::Waiting,
+            })
+        );
+
+        // complete() still accepts a Running task.
+        assert_eq!(tracker.complete(a).unwrap(), Vec::<usize>::new());
+        assert_eq!(tracker.state(a), Some(TrackerState::Done));
+    }
+
+    /// The incremental tracker must agree with the full-scan `ready()` query at
+    /// every step, for a linear pipeline completed in topological order.
+    #[test]
+    fn tracker_ready_agrees_with_graph_ready() {
+        let pipeline = explore_shaped_pipeline();
+        let graph = assert_ok(&pipeline);
+        let mut tracker = ReadyTracker::new(&graph);
+        let mut completed: HashSet<TaskName> = HashSet::new();
+
+        loop {
+            // Compare the tracker's ready set with the full-scan query.
+            let mut from_tracker = tracker_ready_names(&tracker, &graph);
+            from_tracker.sort_unstable();
+            let mut from_graph = names(&graph.ready(&completed));
+            from_graph.sort_unstable();
+            assert_eq!(from_tracker, from_graph);
+
+            let ready = tracker.ready();
+            if ready.is_empty() {
+                break;
+            }
+            let idx = ready[0];
+            let name = graph.tasks()[idx].name().clone();
+            tracker.complete(idx).unwrap();
+            completed.insert(name);
+        }
+
+        assert_eq!(completed.len(), graph.tasks().len());
     }
 }

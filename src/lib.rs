@@ -12,7 +12,7 @@ mod pipeline;
 mod task;
 
 pub use artifact::Artifact;
-pub use errors::{GraphError, TransitionError};
-pub use graph::{EdgeKind, GraphEdge, TaskGraph};
+pub use errors::{GraphError, ReadyError, TransitionError};
+pub use graph::{EdgeKind, GraphEdge, ReadyTracker, TaskGraph, TrackerState};
 pub use pipeline::{Pipeline, PipelineName, PipelineRun, PipelineRunId};
 pub use task::{Task, TaskName, TaskRun, TaskRunId, TaskState};
