@@ -10,7 +10,7 @@ repository = "https://github.com/lgingerich/conductor"
 license = "MIT"
 
 [dependencies]
-jiff = { version = "0.2.32", features = ["serde"] }
+jiff = { version = "1.0.0", features = ["serde"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]
